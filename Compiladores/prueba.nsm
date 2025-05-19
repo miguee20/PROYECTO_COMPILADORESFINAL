@@ -1,0 +1,36 @@
+org 100h
+section .data
+section .text
+start:
+suma:
+push bp
+mov bp, sp
+mov ax, [a]
+add ax, [b]
+mov ax, ax
+mov [c], ax
+mov ax, [c]
+pop bp
+ret
+pop bp
+ret
+main:
+push bp
+mov bp, sp
+mov ax, 3
+mov [a], ax
+mov ax, 4
+mov [b], ax
+push [b]
+push [a]
+call suma
+add sp, 4
+mov ax, ax
+mov [s], ax
+mov dx, [s]
+mov ah, 09h
+int 21h
+pop bp
+ret
+mov ax, 4C00h
+int 21h

@@ -1,0 +1,97 @@
+{
+    "tipo": "NodoPrograma",
+    "funciones": [
+        {
+            "tipo": "int",
+            "nombre": "suma",
+            "parametros": [
+                {
+                    "tipo": "int",
+                    "nombre": "a"
+                },
+                {
+                    "tipo": "int",
+                    "nombre": "b"
+                }
+            ],
+            "cuerpo": [
+                {
+                    "tipo": "int",
+                    "nombre": "c",
+                    "expresion": {
+                        "tipo": "NodoOperacion",
+                        "izquierda": {
+                            "tipo": "NodoIdentificador",
+                            "nombre": "a"
+                        },
+                        "operador": "+",
+                        "derecha": {
+                            "tipo": "NodoIdentificador",
+                            "nombre": "b"
+                        }
+                    }
+                },
+                {
+                    "tipo": "NodoRetorno",
+                    "expresion": {
+                        "tipo": "NodoIdentificador",
+                        "nombre": "c"
+                    }
+                }
+            ]
+        },
+        {
+            "tipo": "void",
+            "nombre": "main",
+            "parametros": [],
+            "cuerpo": [
+                {
+                    "tipo": "int",
+                    "nombre": "s",
+                    "expresion": null
+                },
+                {
+                    "tipo": "int",
+                    "nombre": "a",
+                    "expresion": {
+                        "tipo": "NodoNumero",
+                        "valor": "3"
+                    }
+                },
+                {
+                    "tipo": "int",
+                    "nombre": "b",
+                    "expresion": {
+                        "tipo": "NodoNumero",
+                        "valor": "4"
+                    }
+                },
+                {
+                    "tipo": "NodoAsignacion",
+                    "nombre": "s",
+                    "expresion": {
+                        "tipo": "NodoLlamadaFuncion",
+                        "nombre": "suma",
+                        "argumentos": [
+                            {
+                                "tipo": "NodoIdentificador",
+                                "nombre": "a"
+                            },
+                            {
+                                "tipo": "NodoIdentificador",
+                                "nombre": "b"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "tipo": "NodoPrint",
+                    "expresion": {
+                        "tipo": "NodoIdentificador",
+                        "nombre": "s"
+                    }
+                }
+            ]
+        }
+    ]
+}
