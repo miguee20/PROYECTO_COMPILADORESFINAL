@@ -53,7 +53,7 @@ class Shape:
             return self.canvas.create_rectangle(self.x-60, self.y-30, self.x+60, self.y+30, fill="lightgreen", outline="black")
         elif self.shape_type == "diamond":
             return self.canvas.create_polygon(self.x, self.y-40, self.x+60, self.y, self.x, self.y+40, self.x-60, self.y,
-                                              fill="#FFD966", outline="black")
+                                            fill="#FFD966", outline="black")
 
     def create_ports(self):
         s = self.PORT_SIZE
