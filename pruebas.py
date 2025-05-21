@@ -20,7 +20,7 @@ class Connection:
         self.canvas = canvas
         self.shape1 = shape1
         self.shape2 = shape2
-        self.line = self.canvas.create_line(shape1.x, shape1.y, shape2.x, shape2.y, arrow=tk.LAST, width=3, fill="#1565C0")
+        self.line = self.canvas.create_line(shape1.x, shape1.y, shape2.x, shape2.y, arrow=tk.LAST, width=3, fill="black")
         shape1.connections.append(self)
         shape2.connections.append(self)
 
@@ -150,7 +150,7 @@ class FlowchartApp:
 
         self.toolbar = tk.Frame(root, bg="midnight blue")
         self.toolbar.pack(side=tk.TOP, fill=tk.X)
-        self.canvas = tk.Canvas(root, bg="white", width=1000, height=700)
+        self.canvas = tk.Canvas(root, bg="gray", width=1000, height=700)
         self.canvas.pack(fill=tk.BOTH, expand=True)
 
         self.add_buttons()
