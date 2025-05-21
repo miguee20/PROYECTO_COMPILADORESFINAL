@@ -1,5 +1,9 @@
 import tkinter as tk
 from tkinter import simpledialog, Toplevel, scrolledtext
+import pickle
+from tkinter import filedialog
+import json
+
 
 # Clase para los bloques
 class Bloque:
@@ -44,7 +48,6 @@ def agregar_bloque(tipo):
     diagrama.append(bloque)
     dibujar_bloques()
     mostrar_diagrama()
-
 def dibujar_bloques():
     canvas.delete("all")
     for i, bloque in enumerate(diagrama):
@@ -69,6 +72,16 @@ def dibujar_bloques():
             x1, y1 = diagrama[i-1].x+50, diagrama[i-1].y+50
             x2, y2 = bloque.x+50, bloque.y
             canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST)
+
+        # Conexiones de decisión (Sí / No)
+        if bloque.tipo == "decisión":
+            for si_bloque in bloque.si:
+                canvas.create_line(bloque.x+100, bloque.y+25, si_bloque.x, si_bloque.y+25, arrow=tk.LAST, fill="green")
+                canvas.create_text((bloque.x+100 + si_bloque.x)//2, (bloque.y+25 + si_bloque.y+25)//2 - 10, text="Sí", fill="green")
+            for no_bloque in bloque.no:
+                canvas.create_line(bloque.x, bloque.y+25, no_bloque.x+100, no_bloque.y+25, arrow=tk.LAST, fill="red")
+                canvas.create_text((bloque.x + no_bloque.x+100)//2, (bloque.y+25 + no_bloque.y+25)//2 + 10, text="No", fill="red")
+
 
 # Mostrar el contenido del diagrama
 def mostrar_diagrama():
@@ -111,18 +124,28 @@ def on_canvas_release(event):
 def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
     indent = "    "
+    variables_declaradas = set()
+
     for bloque in diagrama:
         if bloque.tipo == "inicio":
             continue
         elif bloque.tipo == "entrada":
-            codigo += f"{indent}int {bloque.contenido};\n"
+            if bloque.contenido not in variables_declaradas:
+                codigo += f"{indent}int {bloque.contenido};\n"
+                variables_declaradas.add(bloque.contenido)
             codigo += f"{indent}scanf(\"%d\", &{bloque.contenido});\n"
         elif bloque.tipo == "proceso":
             codigo += f"{indent}{bloque.contenido};\n"
         elif bloque.tipo == "salida":
             codigo += f"{indent}printf(\"%d\\n\", {bloque.contenido});\n"
         elif bloque.tipo == "decisión":
-            codigo += f"{indent}if ({bloque.contenido}) {{\n"
+            condicion = bloque.contenido.strip()
+            if any(op in condicion for op in ['<', '>', '==', '!=', '<=', '>=']):
+                codigo += f"{indent}if ({condicion}) {{\n"
+            else:
+                codigo += f"{indent}// Revisa esta condición: {condicion}\n"
+                codigo += f"{indent}if ({condicion}) {{\n"
+
             for si_bloque in bloque.si:
                 if si_bloque.tipo == "proceso":
                     codigo += f"{indent*2}{si_bloque.contenido};\n"
@@ -140,6 +163,7 @@ def generar_codigo_c():
 
     codigo += "}\n"
     mostrar_codigo_c(codigo)
+
 
 def mostrar_codigo_c(codigo):
     ventana_c = Toplevel()
@@ -238,6 +262,47 @@ def mostrar_codigo_asm(codigo):
     texto_asm.pack(fill="both", expand=True)
     texto_asm.insert(tk.END, codigo)
 
+
+def guardar_diagrama():
+    archivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Diagrama de flujo", "*.json")])
+    if archivo:
+        data = []
+        for b in diagrama:
+            bloque_data = {
+                "tipo": b.tipo,
+                "contenido": b.contenido,
+                "x": b.x,
+                "y": b.y,
+                "si": [diagrama.index(s) for s in b.si],
+                "no": [diagrama.index(n) for n in b.no]
+            }
+            data.append(bloque_data)
+        with open(archivo, "w") as f:
+            json.dump(data, f, indent=4)
+def cargar_diagrama():
+    global diagrama
+    archivo = filedialog.askopenfilename(defaultextension=".json", filetypes=[("Diagrama de flujo", "*.json")])
+    if archivo:
+        with open(archivo, "r") as f:
+            data = json.load(f)
+
+        diagrama.clear()
+        for b in data:
+            bloque = Bloque(b["tipo"], b["contenido"])
+            bloque.x = b["x"]
+            bloque.y = b["y"]
+            diagrama.append(bloque)
+
+        # Reconectar relaciones
+        for i, b in enumerate(data):
+            diagrama[i].si = [diagrama[j] for j in b["si"]]
+            diagrama[i].no = [diagrama[j] for j in b["no"]]
+
+        dibujar_bloques()
+        mostrar_diagrama()
+
+
+
 # --- Interfaz principal ---
 ventana = tk.Tk()
 ventana.title("Editor de Diagrama de Flujo")
@@ -251,9 +316,23 @@ for i, tipo in enumerate(tipos):
     b = tk.Button(ventana, text=tipo.upper(), command=lambda t=tipo: agregar_bloque(t), **btn_style)
     b.place(x=10 + i*110, y=10)
 
-# Botón para limpiar todo
+# Botón para limpiar todo, guardar, cargar, generar c y generar asm
 btn_clear = tk.Button(ventana, text="Limpiar Todo", command=limpiar_diagrama, bg="red", fg="white", font=("Arial", 10, "bold"))
 btn_clear.place(x=10, y=50)
+
+btn_guardar = tk.Button(ventana, text="Guardar", command=guardar_diagrama, bg="green", fg="white", font=("Arial", 10, "bold"))
+btn_guardar.place(x=130, y=50)
+
+btn_cargar = tk.Button(ventana, text="Cargar", command=cargar_diagrama, bg="blue", fg="white", font=("Arial", 10, "bold"))
+btn_cargar.place(x=230, y=50)
+
+btn_c = tk.Button(ventana, text="Generar C", command=generar_codigo_c, bg="gold", fg="black", font=("Arial", 10, "bold"))
+btn_c.place(x=350, y=50)
+
+btn_asm = tk.Button(ventana, text="Generar ASM", command=generar_codigo_asm, bg="orange", fg="black", font=("Arial", 10, "bold"))
+btn_asm.place(x=470, y=50)
+
+
 
 # Canvas para dibujo
 canvas = tk.Canvas(ventana, width=700, height=400, bg="white")
@@ -278,8 +357,8 @@ scroll_x = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
 scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
 canvas = tk.Canvas(canvas_frame, width=680, height=380, bg="white",
-                   yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set,
-                   scrollregion=(0, 0, 2000, 2000))  # Puedes ajustar el tamaño del área de trabajo aquí
+                yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set,
+                scrollregion=(0, 0, 2000, 2000))  # Puedes ajustar el tamaño del área de trabajo aquí
 
 scroll_y.config(command=canvas.yview)
 scroll_x.config(command=canvas.xview)
@@ -307,5 +386,6 @@ def zoom(event):
 canvas.bind("<MouseWheel>", zoom)  # Para Windows
 canvas.bind("<Button-4>", zoom)    # Para Linux (scroll up)
 canvas.bind("<Button-5>", zoom)    # Para Linux (scroll down)
+
 
 ventana.mainloop()

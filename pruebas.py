@@ -4,7 +4,7 @@ import json
 
 # ------------------------
 # BLOQUES LÓGICOS
-# ------------------------
+# ----------------- -------
 class Bloque:
     def __init__(self, tipo, contenido=None):
         self.tipo = tipo
