@@ -8,6 +8,10 @@ class Bloque:
         self.contenido = contenido
         self.si = []
         self.no = []
+        self.x = 100
+        self.y = 100
+        self.canvas_id = None
+        self.text_id = None
 
     def __str__(self):
         if self.tipo == 'decisión':
@@ -26,15 +30,45 @@ diagrama = []
 def agregar_bloque(tipo):
     if tipo in ['entrada', 'proceso', 'salida', 'decisión']:
         contenido = simpledialog.askstring("Contenido", f"Ingrese el contenido del bloque '{tipo}':")
-        if contenido:
-            bloque = Bloque(tipo, contenido)
-            if tipo == 'decisión':
-                bloque.si.append(Bloque('proceso', 'Bloque SI'))
-                bloque.no.append(Bloque('proceso', 'Bloque NO'))
-            diagrama.append(bloque)
+        if not contenido:
+            return
+        bloque = Bloque(tipo, contenido)
+        if tipo == 'decisión':
+            bloque.si.append(Bloque('proceso', 'Bloque SI'))
+            bloque.no.append(Bloque('proceso', 'Bloque NO'))
     else:
-        diagrama.append(Bloque(tipo))
+        bloque = Bloque(tipo)
+
+    bloque.x = 100 + len(diagrama) * 150
+    bloque.y = 150
+    diagrama.append(bloque)
+    dibujar_bloques()
     mostrar_diagrama()
+
+def dibujar_bloques():
+    canvas.delete("all")
+    for i, bloque in enumerate(diagrama):
+        x, y = bloque.x, bloque.y
+        if bloque.tipo == 'inicio' or bloque.tipo == 'fin':
+            bloque.canvas_id = canvas.create_oval(x, y, x+100, y+50, fill="lightblue")
+        elif bloque.tipo == 'decisión':
+            bloque.canvas_id = canvas.create_polygon(
+                x+50, y,
+                x+100, y+25,
+                x+50, y+50,
+                x, y+25,
+                fill="gold"
+            )
+        else:
+            bloque.canvas_id = canvas.create_rectangle(x, y, x+100, y+50, fill="lightgreen")
+
+        texto = bloque.tipo.upper() if not bloque.contenido else bloque.contenido
+        bloque.text_id = canvas.create_text(x+50, y+25, text=texto, font=("Arial", 9, "bold"))
+
+        if i > 0:
+            x1, y1 = diagrama[i-1].x+50, diagrama[i-1].y+50
+            x2, y2 = bloque.x+50, bloque.y
+            canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST)
 
 # Mostrar el contenido del diagrama
 def mostrar_diagrama():
@@ -42,7 +76,38 @@ def mostrar_diagrama():
     for bloque in diagrama:
         texto.insert(tk.END, str(bloque) + '\n\n')
 
-# Función que genera código en C
+# Función para limpiar todo
+def limpiar_diagrama():
+    diagrama.clear()
+    canvas.delete("all")
+    texto.delete(1.0, tk.END)
+
+# Funciones para mover bloques con el mouse
+moviendo_bloque = None
+def on_canvas_click(event):
+    global moviendo_bloque
+    click_x = canvas.canvasx(event.x)
+    click_y = canvas.canvasy(event.y)
+    for bloque in diagrama:
+        x1, y1 = bloque.x, bloque.y
+        x2, y2 = x1 + 100, y1 + 50
+        if x1 <= click_x <= x2 and y1 <= click_y <= y2:
+            moviendo_bloque = bloque
+            break
+
+def on_canvas_drag(event):
+    global moviendo_bloque
+    if moviendo_bloque:
+        mouse_x = canvas.canvasx(event.x)
+        mouse_y = canvas.canvasy(event.y)
+        moviendo_bloque.x = mouse_x - 50
+        moviendo_bloque.y = mouse_y - 25
+        dibujar_bloques()
+
+def on_canvas_release(event):
+    global moviendo_bloque
+    moviendo_bloque = None
+
 def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
     indent = "    "
@@ -76,7 +141,6 @@ def generar_codigo_c():
     codigo += "}\n"
     mostrar_codigo_c(codigo)
 
-# Mostrar el código C en una nueva ventana
 def mostrar_codigo_c(codigo):
     ventana_c = Toplevel()
     ventana_c.title("Código en C")
@@ -85,8 +149,6 @@ def mostrar_codigo_c(codigo):
     texto_c.pack(fill="both", expand=True)
     texto_c.insert(tk.END, codigo)
 
-
-# Función para generar el codigo ensamblador ASM
 def generar_codigo_asm():
     asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"
     usados = []
@@ -176,36 +238,74 @@ def mostrar_codigo_asm(codigo):
     texto_asm.pack(fill="both", expand=True)
     texto_asm.insert(tk.END, codigo)
 
-
-# Interfaz principal
+# --- Interfaz principal ---
 ventana = tk.Tk()
-ventana.title("Generador de Diagrama de Flujo")
-ventana.geometry("700x520")
+ventana.title("Editor de Diagrama de Flujo")
+ventana.geometry("950x600")
 ventana.configure(bg="midnight blue")
 
-btn_style = {"bg": "slategray2", "fg": "black", "font": ("Arial", 10, "bold"), "relief": "groove", "width": 12}
-
 # Botones de bloques
+btn_style = {"bg": "slategray2", "fg": "black", "font": ("Arial", 10, "bold"), "relief": "groove", "width": 10}
 tipos = ['inicio', 'entrada', 'proceso', 'decisión', 'salida', 'fin']
 for i, tipo in enumerate(tipos):
     b = tk.Button(ventana, text=tipo.upper(), command=lambda t=tipo: agregar_bloque(t), **btn_style)
-    b.grid(row=0, column=i, padx=5, pady=10)
+    b.place(x=10 + i*110, y=10)
+
+# Botón para limpiar todo
+btn_clear = tk.Button(ventana, text="Limpiar Todo", command=limpiar_diagrama, bg="red", fg="white", font=("Arial", 10, "bold"))
+btn_clear.place(x=10, y=50)
+
+# Canvas para dibujo
+canvas = tk.Canvas(ventana, width=700, height=400, bg="white")
+canvas.place(x=10, y=100)
+canvas.bind("<Button-1>", on_canvas_click)
+canvas.bind("<B1-Motion>", on_canvas_drag)
+canvas.bind("<ButtonRelease-1>", on_canvas_release)
 
 
+# Texto del diagrama
+texto = tk.Text(ventana, width=35, height=30, bg="black", fg="gold", font=("Courier", 9))
+texto.place(x=730, y=10)
 
-# Botón para generar C
-btn_generar_c = tk.Button(ventana, text="Generar Código C", command=generar_codigo_c, bg="gold", fg="black", font=("Arial", 10, "bold"))
-btn_generar_c.grid(row=1, column=0, columnspan=6, pady=5)
+# --- Frame con Scroll para el Canvas ---
+canvas_frame = tk.Frame(ventana, width=700, height=400)
+canvas_frame.place(x=10, y=100)
 
-# Botón para generar ensamblador
-btn_generar_asm = tk.Button(ventana, text="Generar Código ASM", command=generar_codigo_asm, bg="orange", fg="black", font=("Arial", 10, "bold"))
-btn_generar_asm.grid(row=3, column=0, columnspan=6, pady=5)
+scroll_y = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
+scroll_x = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
-# Caja de texto con el diagrama
-texto = tk.Text(ventana, width=80, height=23, bg="black", fg="gold", font=("Courier", 10))
-texto.grid(row=2, column=0, columnspan=6, padx=10, pady=10)
+canvas = tk.Canvas(canvas_frame, width=680, height=380, bg="white",
+                   yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set,
+                   scrollregion=(0, 0, 2000, 2000))  # Puedes ajustar el tamaño del área de trabajo aquí
+
+scroll_y.config(command=canvas.yview)
+scroll_x.config(command=canvas.xview)
+canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+# Eventos de movimiento de bloques (sin cambios)
+canvas.bind("<Button-1>", on_canvas_click)
+canvas.bind("<B1-Motion>", on_canvas_drag)
+canvas.bind("<ButtonRelease-1>", on_canvas_release)
+
+# Zoom con Ctrl + Rueda del mouse
+scale = 1.0
+
+def zoom(event):
+    global scale
+    if event.state & 0x0004:  # Ctrl presionado
+        if event.delta > 0:
+            factor = 1.1
+        else:
+            factor = 0.9
+        scale *= factor
+        canvas.scale("all", canvas.canvasx(event.x), canvas.canvasy(event.y), factor, factor)
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+canvas.bind("<MouseWheel>", zoom)  # Para Windows
+canvas.bind("<Button-4>", zoom)    # Para Linux (scroll up)
+canvas.bind("<Button-5>", zoom)    # Para Linux (scroll down)
 
 ventana.mainloop()
-
-
