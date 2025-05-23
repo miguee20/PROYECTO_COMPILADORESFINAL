@@ -29,6 +29,8 @@ class Bloque:
 
 # Lista del diagrama
 diagrama = []
+arrastrando_desde_puerto = False
+
 
 # Función para agregar bloques
 def agregar_bloque(tipo):
@@ -48,6 +50,7 @@ def agregar_bloque(tipo):
     diagrama.append(bloque)
     dibujar_bloques()
     mostrar_diagrama()
+
 def dibujar_bloques():
     canvas.delete("all")
     for i, bloque in enumerate(diagrama):
@@ -68,19 +71,20 @@ def dibujar_bloques():
         texto = bloque.tipo.upper() if not bloque.contenido else bloque.contenido
         bloque.text_id = canvas.create_text(x+50, y+25, text=texto, font=("Arial", 9, "bold"))
 
-        if i > 0:
-            x1, y1 = diagrama[i-1].x+50, diagrama[i-1].y+50
-            x2, y2 = bloque.x+50, bloque.y
-            canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST)
+        # Dibujar puertos solo si el bloque está seleccionado
+    if bloque_seleccionado:
+        for dx, dy in [(50, 0), (50, 50), (0, 25), (100, 25)]:  # arriba, abajo, izquierda, derecha
+            px, py = bloque_seleccionado.x + dx, bloque_seleccionado.y + dy
+            r = 5
+            canvas.create_oval(px - r, py - r, px + r, py + r, fill="black", tags=("puerto",))
+        # Dibujar conexiones manuales
+    for origen, destino in conexiones:
+        x1 = origen.x + 50
+        y1 = origen.y + 50
+        x2 = destino.x + 50
+        y2 = destino.y
+        canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST, fill="blue", width=2)
 
-        # Conexiones de decisión (Sí / No)
-        if bloque.tipo == "decisión":
-            for si_bloque in bloque.si:
-                canvas.create_line(bloque.x+100, bloque.y+25, si_bloque.x, si_bloque.y+25, arrow=tk.LAST, fill="green")
-                canvas.create_text((bloque.x+100 + si_bloque.x)//2, (bloque.y+25 + si_bloque.y+25)//2 - 10, text="Sí", fill="green")
-            for no_bloque in bloque.no:
-                canvas.create_line(bloque.x, bloque.y+25, no_bloque.x+100, no_bloque.y+25, arrow=tk.LAST, fill="red")
-                canvas.create_text((bloque.x + no_bloque.x+100)//2, (bloque.y+25 + no_bloque.y+25)//2 + 10, text="No", fill="red")
 
 
 # Mostrar el contenido del diagrama
@@ -95,18 +99,35 @@ def limpiar_diagrama():
     canvas.delete("all")
     texto.delete(1.0, tk.END)
 
+bloque_seleccionado = None
+puerto_origen = None
+linea_temporal = None
+conexiones = []  # Lista de tuplas (bloque_origen, bloque_destino)
+
 # Funciones para mover bloques con el mouse
 moviendo_bloque = None
 def on_canvas_click(event):
-    global moviendo_bloque
+    global moviendo_bloque, bloque_seleccionado, arrastrando_desde_puerto
+
+    if arrastrando_desde_puerto:
+        return  # Evitar mover bloques si estamos arrastrando desde un puerto
+
     click_x = canvas.canvasx(event.x)
     click_y = canvas.canvasy(event.y)
+    bloque_seleccionado = None
+    moviendo_bloque = None
+
     for bloque in diagrama:
         x1, y1 = bloque.x, bloque.y
         x2, y2 = x1 + 100, y1 + 50
         if x1 <= click_x <= x2 and y1 <= click_y <= y2:
             moviendo_bloque = bloque
+            bloque_seleccionado = bloque
             break
+
+    dibujar_bloques()
+
+
 
 def on_canvas_drag(event):
     global moviendo_bloque
@@ -118,8 +139,45 @@ def on_canvas_drag(event):
         dibujar_bloques()
 
 def on_canvas_release(event):
-    global moviendo_bloque
+    global moviendo_bloque, arrastrando_desde_puerto
     moviendo_bloque = None
+    arrastrando_desde_puerto = False
+
+
+def on_puerto_click(event):
+    global puerto_origen, linea_temporal, arrastrando_desde_puerto
+    arrastrando_desde_puerto = True
+    x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+    puerto_origen = (x, y)
+    linea_temporal = canvas.create_line(x, y, x, y, arrow=tk.LAST, dash=(4, 2))
+
+
+def on_puerto_drag(event):
+    global linea_temporal
+    if linea_temporal:
+        x2, y2 = canvas.canvasx(event.x), canvas.canvasy(event.y)
+        canvas.coords(linea_temporal, puerto_origen[0], puerto_origen[1], x2, y2)
+
+def on_puerto_release(event):
+    global puerto_origen, linea_temporal, arrastrando_desde_puerto
+
+    arrastrando_desde_puerto = False
+
+    if linea_temporal:
+        canvas.delete(linea_temporal)
+        linea_temporal = None
+
+    x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+    for bloque in diagrama:
+        if bloque.x <= x <= bloque.x + 100 and bloque.y <= y <= bloque.y + 50:
+            if bloque_seleccionado and bloque != bloque_seleccionado:
+                conexiones.append((bloque_seleccionado, bloque))
+            break
+
+    puerto_origen = None
+    dibujar_bloques()
+
+
 
 def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
@@ -368,6 +426,12 @@ canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 canvas.bind("<Button-1>", on_canvas_click)
 canvas.bind("<B1-Motion>", on_canvas_drag)
 canvas.bind("<ButtonRelease-1>", on_canvas_release)
+canvas.tag_bind("puerto", "<Button-1>", on_puerto_click)
+canvas.tag_bind("puerto", "<B1-Motion>", on_puerto_drag)
+canvas.tag_bind("puerto", "<ButtonRelease-1>", on_puerto_release)
+
+
+
 
 # Zoom con Ctrl + Rueda del mouse
 scale = 1.0
