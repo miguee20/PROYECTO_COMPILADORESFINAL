@@ -4,7 +4,6 @@ import pickle
 from tkinter import filedialog
 import json
 
-
 # Clase para los bloques
 class Bloque:
     def __init__(self, tipo, contenido=None):
@@ -26,11 +25,19 @@ class Bloque:
             return f"{self.tipo.upper()}: {self.contenido}"
         else:
             return f"{self.tipo.upper()}"
+        
+
+class Conexion:
+    def __init__(self, origen, destino, tipo):
+        self.origen = origen
+        self.destino = destino
+        self.tipo = tipo  # 'si' o 'no'
+        self.line_id = None
+        self.text_id = None
 
 # Lista del diagrama
 diagrama = []
 arrastrando_desde_puerto = False
-
 
 # Función para agregar bloques
 def agregar_bloque(tipo):
@@ -78,13 +85,43 @@ def dibujar_bloques():
             r = 5
             canvas.create_oval(px - r, py - r, px + r, py + r, fill="black", tags=("puerto",))
         # Dibujar conexiones manuales
-    for origen, destino in conexiones:
-        x1 = origen.x + 50
-        y1 = origen.y + 50
-        x2 = destino.x + 50
-        y2 = destino.y
-        canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST, fill="blue", width=2)
+    for conexion in conexiones:
+        # Punto de partida
+        if conexion.origen.tipo == "inicio":
+            x1 = conexion.origen.x + 50  # centro horizontal
+            y1 = conexion.origen.y + 50  # parte inferior
+        elif conexion.origen.tipo == "decisión":
+            if conexion.tipo == "si":
+                x1 = conexion.origen.x + 100  # lado derecho
+                y1 = conexion.origen.y + 25   # centro vertical
+            elif conexion.tipo == "no":
+                x1 = conexion.origen.x + 50   # centro horizontal
+                y1 = conexion.origen.y + 50   # parte inferior
+            else:
+                x1 = conexion.origen.x + 50
+                y1 = conexion.origen.y + 50
+        else:
+            x1 = conexion.origen.x + 50
+            y1 = conexion.origen.y + 50
 
+        # Punto final
+        # Punto final (posición de entrada al destino)
+        if conexion.tipo == "si":
+            x2 = conexion.destino.x  # lado izquierdo
+            y2 = conexion.destino.y + 25  # centro vertical
+        else:
+            x2 = conexion.destino.x + 50  # centro horizontal
+            y2 = conexion.destino.y       # parte superior
+
+
+        # Color y texto
+        color = "green" if conexion.tipo == "si" else "red" if conexion.tipo == "no" else "blue"
+        label = "Sí" if conexion.tipo == "si" else "No" if conexion.tipo == "no" else ""
+
+        # Dibujar la línea y el texto
+        conexion.line_id = canvas.create_line(x1, y1, x2, y2, arrow=tk.LAST, fill=color, width=2)
+        if label:
+            conexion.text_id = canvas.create_text((x1 + x2) // 2, (y1 + y2) // 2 - 10, text=label, fill=color, font=("Arial", 9, "bold"))
 
 
 # Mostrar el contenido del diagrama
@@ -128,7 +165,6 @@ def on_canvas_click(event):
     dibujar_bloques()
 
 
-
 def on_canvas_drag(event):
     global moviendo_bloque
     if moviendo_bloque:
@@ -143,14 +179,12 @@ def on_canvas_release(event):
     moviendo_bloque = None
     arrastrando_desde_puerto = False
 
-
 def on_puerto_click(event):
     global puerto_origen, linea_temporal, arrastrando_desde_puerto
     arrastrando_desde_puerto = True
     x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
     puerto_origen = (x, y)
     linea_temporal = canvas.create_line(x, y, x, y, arrow=tk.LAST, dash=(4, 2))
-
 
 def on_puerto_drag(event):
     global linea_temporal
@@ -171,12 +205,15 @@ def on_puerto_release(event):
     for bloque in diagrama:
         if bloque.x <= x <= bloque.x + 100 and bloque.y <= y <= bloque.y + 50:
             if bloque_seleccionado and bloque != bloque_seleccionado:
-                conexiones.append((bloque_seleccionado, bloque))
-            break
+                if bloque_seleccionado.tipo == "decisión":
+                    tipo = simpledialog.askstring("Tipo", "¿'si' o 'no'?")
+                    if tipo in ['si', 'no']:
+                        conexiones.append(Conexion(bloque_seleccionado, bloque, tipo))
+                else:
+                    conexiones.append(Conexion(bloque_seleccionado, bloque, 'normal'))
 
     puerto_origen = None
     dibujar_bloques()
-
 
 
 def generar_codigo_c():
@@ -221,7 +258,6 @@ def generar_codigo_c():
 
     codigo += "}\n"
     mostrar_codigo_c(codigo)
-
 
 def mostrar_codigo_c(codigo):
     ventana_c = Toplevel()
@@ -289,7 +325,6 @@ def generar_codigo_asm():
                 asm += f"    MOV AL, {expresion}\n"
                 asm += f"    MOV {var_dest}, AL\n"
 
-
         elif bloque.tipo == "salida":
             asm += f"    ; Mostrar {bloque.contenido}\n"
             asm += "    MOV DL, '0' + {0}\n".format(bloque.contenido)
@@ -319,7 +354,6 @@ def mostrar_codigo_asm(codigo):
     texto_asm = scrolledtext.ScrolledText(ventana_asm, font=("Courier", 10), bg="black", fg="lightgreen", insertbackground="white")
     texto_asm.pack(fill="both", expand=True)
     texto_asm.insert(tk.END, codigo)
-
 
 def guardar_diagrama():
     archivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Diagrama de flujo", "*.json")])
@@ -360,7 +394,6 @@ def cargar_diagrama():
         mostrar_diagrama()
 
 
-
 # --- Interfaz principal ---
 ventana = tk.Tk()
 ventana.title("Editor de Diagrama de Flujo")
@@ -391,14 +424,12 @@ btn_asm = tk.Button(ventana, text="Generar ASM", command=generar_codigo_asm, bg=
 btn_asm.place(x=470, y=50)
 
 
-
 # Canvas para dibujo
 canvas = tk.Canvas(ventana, width=700, height=400, bg="white")
 canvas.place(x=10, y=100)
 canvas.bind("<Button-1>", on_canvas_click)
 canvas.bind("<B1-Motion>", on_canvas_drag)
 canvas.bind("<ButtonRelease-1>", on_canvas_release)
-
 
 # Texto del diagrama
 texto = tk.Text(ventana, width=35, height=30, bg="black", fg="gold", font=("Courier", 9))
@@ -432,7 +463,6 @@ canvas.tag_bind("puerto", "<ButtonRelease-1>", on_puerto_release)
 
 
 
-
 # Zoom con Ctrl + Rueda del mouse
 scale = 1.0
 
@@ -451,5 +481,6 @@ canvas.bind("<MouseWheel>", zoom)  # Para Windows
 canvas.bind("<Button-4>", zoom)    # Para Linux (scroll up)
 canvas.bind("<Button-5>", zoom)    # Para Linux (scroll down)
 
-
 ventana.mainloop()
+
+
