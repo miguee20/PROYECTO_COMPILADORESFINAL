@@ -232,7 +232,7 @@ def on_puerto_drag(event):
         canvas.coords(linea_temporal, puerto_origen[0], puerto_origen[1], x2, y2)
 
 def on_puerto_release(event):
-    global puerto_origen, linea_temporal, arrastrando_desde_puerto
+    global puerto_origen, linea_temporal, arrastrando_desde_puerto, bloque_seleccionado, conexiones
 
     arrastrando_desde_puerto = False
 
@@ -240,20 +240,46 @@ def on_puerto_release(event):
         canvas.delete(linea_temporal)
         linea_temporal = None
 
+    # Obtener posición de release
     x, y = canvas.canvasx(event.x), canvas.canvasy(event.y)
+    
+    # Buscar bloque destino
+    bloque_destino = None
     for bloque in diagrama:
         if bloque.x <= x <= bloque.x + 100 and bloque.y <= y <= bloque.y + 50:
-            if bloque_seleccionado and bloque != bloque_seleccionado:
-                if bloque_seleccionado.tipo == "decisión":
-                    tipo = simpledialog.askstring("Tipo", "¿'si' o 'no'?")
-                    if tipo in ['si', 'no']:
-                        conexiones.append(Conexion(bloque_seleccionado, bloque, tipo))
+            bloque_destino = bloque
+            break
+
+    # Si hay un bloque seleccionado y un destino válido
+    if bloque_seleccionado and bloque_destino and bloque_seleccionado != bloque_destino:
+        # Para bloques de decisión
+        if bloque_seleccionado.tipo == "decisión":
+            # Pedir tipo de conexión (Sí/No)
+            tipo = simpledialog.askstring("Tipo de conexión", "Ingrese 'si' o 'no' para la conexión:")
+            if tipo and tipo.lower() in ['si', 'no']:
+                # Verificar si ya existe una conexión del mismo tipo
+                existe_conexion = any(
+                    c.origen == bloque_seleccionado and c.tipo == tipo 
+                    for c in conexiones
+                )
+                
+                if not existe_conexion:
+                    conexion = Conexion(bloque_seleccionado, bloque_destino, tipo)
+                    conexiones.append(conexion)
                 else:
-                    conexiones.append(Conexion(bloque_seleccionado, bloque, 'normal'))
+                    tk.messagebox.showerror("Error", f"Ya existe una conexión '{tipo}' para este bloque de decisión")
+        else:
+            # Para otros bloques (conexión normal)
+            conexion = Conexion(bloque_seleccionado, bloque_destino, 'normal')
+            conexiones.append(conexion)
+        
+        # Actualizar visualización
+        dibujar_bloques()
+        mostrar_diagrama()
 
+    # Limpiar selección
     puerto_origen = None
-    dibujar_bloques()
-
+    bloque_seleccionado = None
 
 def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
@@ -262,14 +288,42 @@ def generar_codigo_c():
     pila_estructuras = []  # Para manejar anidamiento
     bloques_procesados = set()
 
-    # Función para declarar variables
     def declarar_variable(var):
         nonlocal codigo
         if var not in variables_declaradas and var.isidentifier():
             codigo += f"{indent * len(pila_estructuras)}int {var};\n"
             variables_declaradas.add(var)
 
-    # Procesar cada bloque
+    def detectar_for(bloque, i, conexiones):
+        # El bloque debe ser una decisión tipo "i < n"
+        if bloque.tipo != "decisión" or i < 1:
+            return False
+
+        init_bloque = diagrama[i - 1]
+        if init_bloque.tipo != "proceso":
+            return False
+
+        init_contenido = init_bloque.contenido.replace(" ", "")
+        if "=" not in init_contenido:
+            return False
+
+        var_init, val_init = init_contenido.split("=")
+        var = var_init.strip()
+
+        # Verifica que en la conexión "no" haya un incremento de la misma variable
+        for c in conexiones:
+            if c.origen == bloque and c.tipo == "no":
+                destino = c.destino
+                if destino.tipo == "proceso":
+                    contenido = destino.contenido.replace(" ", "")
+                    if contenido.startswith(f"{var}=") and (
+                        "+1" in contenido or "++" in contenido
+                    ):
+                        return True
+        return False
+
+
+
     i = 0
     while i < len(diagrama):
         bloque = diagrama[i]
@@ -287,62 +341,80 @@ def generar_codigo_c():
             declarar_variable(bloque.contenido)
             codigo += f"{indent_actual}scanf(\"%d\", &{bloque.contenido});\n"
         elif bloque.tipo == "proceso":
-            codigo += f"{indent_actual}{bloque.contenido};\n"
+            # Optimizar i = i + 1 → i++
+            contenido = bloque.contenido.replace(" ", "")
+            if contenido.endswith("=i+1") or contenido.endswith("+=1"):
+                var = contenido.split("=")[0]
+                codigo += f"{indent_actual}{var}++;\n"
+            else:
+                codigo += f"{indent_actual}{bloque.contenido};\n"
         elif bloque.tipo == "salida":
             codigo += f"{indent_actual}printf(\"%d\\n\", {bloque.contenido});\n"
         elif bloque.tipo == "fin":
             codigo += f"{indent_actual}return 0;\n"
             
-        # --- DECISIONES ---
+        # --- ESTRUCTURAS DE CONTROL ---
         elif bloque.tipo == "decisión":
             condicion = bloque.contenido
-            # Verificar si es un ciclo while
-            es_while = any(
-                c.tipo == "si" and c.destino in diagrama[:i]
-                for c in conexiones
-                if c.origen == bloque
-            )
-            
-            if es_while:
+
+            # Detectar FOR
+            if detectar_for(bloque, i, conexiones):
+                init_bloque = diagrama[i - 1]
+                var, val = init_bloque.contenido.replace(" ", "").split("=")
+                codigo += f"{indent_actual}for ({var} = {val}; {condicion}; {var}++) {{\n"
+                pila_estructuras.append("for")
+                bloques_procesados.add(diagrama[i - 1])  # i = 0
+                # Bloque de incremento (como i++)
+                for conexion in conexiones:
+                    if conexion.origen == bloque and conexion.tipo == "no":
+                        bloques_procesados.add(conexion.destino)
+                i += 1  # Saltar el init_bloque ya procesado
+
+            # Detectar WHILE (si hay conexión "si" hacia atrás)
+            elif any(
+                c.tipo == "si" and diagrama.index(c.destino) < i
+                for c in conexiones if c.origen == bloque
+            ):
                 codigo += f"{indent_actual}while ({condicion}) {{\n"
                 pila_estructuras.append("while")
+
+            # IF normal
             else:
                 codigo += f"{indent_actual}if ({condicion}) {{\n"
                 pila_estructuras.append("if")
-                
-                # Procesar bloques SI
+
                 for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "si"]:
-                    if conexion.destino.tipo == "proceso":
+                    if conexion.destino.tipo in ["proceso", "salida"]:
                         codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
-                    elif conexion.destino.tipo == "salida":
-                        codigo += f"{indent_actual}    printf(\"%d\\n\", {conexion.destino.contenido});\n"
                     bloques_procesados.add(conexion.destino)
-                
+
                 codigo += f"{indent_actual}}} else {{\n"
-                
-                # Procesar bloques NO
+
                 for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "no"]:
-                    if conexion.destino.tipo == "proceso":
+                    if conexion.destino.tipo in ["proceso", "salida"]:
                         codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
-                    elif conexion.destino.tipo == "salida":
-                        codigo += f"{indent_actual}    printf(\"%d\\n\", {conexion.destino.contenido});\n"
                     bloques_procesados.add(conexion.destino)
-                
+
                 codigo += f"{indent_actual}}}\n"
-                pila_estructuras.pop()  # Sacar el if de la pila
+                pila_estructuras.pop()
+
 
         # Cierre de estructuras
-        if pila_estructuras and (i == len(diagrama)-1 or diagrama[i+1] not in [c.destino for c in conexiones if c.origen == bloque]):
-            estructura = pila_estructuras.pop()
-            codigo += f"{indent * len(pila_estructuras)}}}\n"
+        # Cierre de estructuras si no hay continuación lógica
+        proximos = [c.destino for c in conexiones if c.origen == bloque]
+        if not proximos or (i + 1 < len(diagrama) and diagrama[i + 1] not in proximos):
+            while pila_estructuras:
+                estructura = pila_estructuras.pop()
+                codigo += f"{indent * len(pila_estructuras)}}}\n"
+
 
         i += 1
 
-    # Asegurar declaración de variables
+    # Declarar variables no inicializadas
     vars_usadas = set()
     for bloque in diagrama:
         if bloque.contenido:
-            for token in bloque.contenido.split():
+            for token in bloque.contenido.replace(";", "").split():
                 if token.isidentifier() and token not in ["printf", "scanf"]:
                     vars_usadas.add(token)
     
@@ -468,43 +540,116 @@ def mostrar_codigo_asm(codigo):
     texto_asm.insert(tk.END, codigo)
 
 def guardar_diagrama():
-    archivo = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("Diagrama de flujo", "*.json")])
-    if archivo:
-        data = []
-        for b in diagrama:
+    archivo = filedialog.asksaveasfilename(
+        defaultextension=".json", 
+        filetypes=[("Diagrama de flujo", "*.json"), ("Todos los archivos", "*.*")]
+    )
+    if not archivo:
+        return
+    
+    try:
+        # Preparar datos de bloques
+        bloques_data = []
+        for bloque in diagrama:
             bloque_data = {
-                "tipo": b.tipo,
-                "contenido": b.contenido,
-                "x": b.x,
-                "y": b.y,
-                "si": [diagrama.index(s) for s in b.si],
-                "no": [diagrama.index(n) for n in b.no]
+                "tipo": bloque.tipo,
+                "contenido": bloque.contenido,
+                "x": bloque.x,
+                "y": bloque.y,
+                "canvas_id": None,  # No guardamos IDs del canvas
+                "text_id": None     # No guardamos IDs de texto
             }
-            data.append(bloque_data)
-        with open(archivo, "w") as f:
-            json.dump(data, f, indent=4)
+            bloques_data.append(bloque_data)
+        
+        # Preparar datos de conexiones
+        conexiones_data = []
+        for conexion in conexiones:
+            try:
+                origen_idx = diagrama.index(conexion.origen)
+                destino_idx = diagrama.index(conexion.destino)
+                conexiones_data.append({
+                    "origen": origen_idx,
+                    "destino": destino_idx,
+                    "tipo": conexion.tipo
+                })
+            except ValueError:
+                continue  # Si no encuentra el bloque, omite la conexión
+        
+        # Estructura completa del archivo
+        data = {
+            "version": 1.0,
+            "bloques": bloques_data,
+            "conexiones": conexiones_data
+        }
+        
+        # Guardar con formato legible
+        with open(archivo, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4, ensure_ascii=False)
+            
+        tk.messagebox.showinfo("Éxito", "Diagrama guardado correctamente")
+        
+    except Exception as e:
+        tk.messagebox.showerror("Error", f"No se pudo guardar el diagrama:\n{str(e)}")
+
 def cargar_diagrama():
-    global diagrama
-    archivo = filedialog.askopenfilename(defaultextension=".json", filetypes=[("Diagrama de flujo", "*.json")])
-    if archivo:
-        with open(archivo, "r") as f:
+    global diagrama, conexiones
+    
+    archivo = filedialog.askopenfilename(
+        defaultextension=".json", 
+        filetypes=[("Diagrama de flujo", "*.json"), ("Todos los archivos", "*.*")]
+    )
+    if not archivo:
+        return
+    
+    try:
+        with open(archivo, "r", encoding="utf-8") as f:
             data = json.load(f)
-
+        
+        # Validar estructura básica
+        if not isinstance(data, dict) or "bloques" not in data:
+            raise ValueError("El archivo no tiene un formato válido")
+        
+        # Limpiar diagrama actual
         diagrama.clear()
-        for b in data:
-            bloque = Bloque(b["tipo"], b["contenido"])
-            bloque.x = b["x"]
-            bloque.y = b["y"]
+        conexiones.clear()
+        
+        # Cargar bloques
+        for b_data in data["bloques"]:
+            bloque = Bloque(b_data["tipo"], b_data.get("contenido"))
+            bloque.x = b_data.get("x", 100)
+            bloque.y = b_data.get("y", 100)
             diagrama.append(bloque)
-
-        # Reconectar relaciones
-        for i, b in enumerate(data):
-            diagrama[i].si = [diagrama[j] for j in b["si"]]
-            diagrama[i].no = [diagrama[j] for j in b["no"]]
-
+        
+        # Cargar conexiones (si existen en el archivo)
+        if "conexiones" in data:
+            for c_data in data["conexiones"]:
+                try:
+                    origen = diagrama[c_data["origen"]]
+                    destino = diagrama[c_data["destino"]]
+                    conexion = Conexion(origen, destino, c_data["tipo"])
+                    conexiones.append(conexion)
+                except (IndexError, KeyError):
+                    continue  # Omite conexiones inválidas
+        
+        # Reconstruir relaciones si/no para decisiones (para compatibilidad con versiones antiguas)
+        if "conexiones" not in data:
+            for bloque in diagrama:
+                if bloque.tipo == "decisión" and not bloque.si and not bloque.no:
+                    bloque.si.append(Bloque('proceso', 'Bloque SI'))
+                    bloque.no.append(Bloque('proceso', 'Bloque NO'))
+        
         dibujar_bloques()
         mostrar_diagrama()
-
+        tk.messagebox.showinfo("Éxito", "Diagrama cargado correctamente")
+        
+    except json.JSONDecodeError:
+        tk.messagebox.showerror("Error", "El archivo no es un JSON válido")
+    except Exception as e:
+        tk.messagebox.showerror("Error", f"No se pudo cargar el diagrama:\n{str(e)}")
+        # Limpiar en caso de error parcial
+        diagrama.clear()
+        conexiones.clear()
+        dibujar_bloques()
 
 # --- Interfaz principal ---
 ventana = tk.Tk()
