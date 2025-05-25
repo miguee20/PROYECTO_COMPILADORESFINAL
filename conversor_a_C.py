@@ -259,102 +259,98 @@ def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
     indent = "    "
     variables_declaradas = set()
-    pila_estructuras = []  # Para manejar anidamiento (if/for/while)
-    bloques_visitados = set()  # Evitar procesar bloques múltiples veces
+    pila_estructuras = []  # Para manejar anidamiento
+    bloques_procesados = set()
 
-    # Función para declarar variables automáticamente
+    # Función para declarar variables
     def declarar_variable(var):
         nonlocal codigo
-        if var not in variables_declaradas:
+        if var not in variables_declaradas and var.isidentifier():
             codigo += f"{indent * len(pila_estructuras)}int {var};\n"
             variables_declaradas.add(var)
 
-    # Analizar conexiones para detectar ciclos
-    def es_ciclo(bloque):
-        # Verificar si alguna conexión "Sí" vuelve a un bloque anterior (while)
-        for conexion in conexiones:
-            if conexion.origen == bloque and conexion.tipo == "si":
-                if conexion.destino in diagrama[:diagrama.index(bloque)]:
-                    return "while"
-        return None
-
-    # Procesar cada bloque del diagrama
+    # Procesar cada bloque
     i = 0
     while i < len(diagrama):
         bloque = diagrama[i]
-        if bloque in bloques_visitados:
+        if bloque in bloques_procesados:
             i += 1
             continue
-        bloques_visitados.add(bloque)
-
+            
+        bloques_procesados.add(bloque)
         indent_actual = indent * len(pila_estructuras)
 
-        # --- INICIO/FIN ---
+        # --- BLOQUES BÁSICOS ---
         if bloque.tipo == "inicio":
-            pass  # No necesita código
-        elif bloque.tipo == "fin":
-            codigo += f"{indent_actual}return 0;\n"
-
-        # --- ENTRADA/SALIDA ---
+            pass
         elif bloque.tipo == "entrada":
             declarar_variable(bloque.contenido)
             codigo += f"{indent_actual}scanf(\"%d\", &{bloque.contenido});\n"
+        elif bloque.tipo == "proceso":
+            codigo += f"{indent_actual}{bloque.contenido};\n"
         elif bloque.tipo == "salida":
             codigo += f"{indent_actual}printf(\"%d\\n\", {bloque.contenido});\n"
-
-        # --- PROCESO (ASIGNACIONES) ---
-        elif bloque.tipo == "proceso":
-            # Detectar si es parte de un for (ej. "i = i + 1")
-            contenido = bloque.contenido.replace(" ", "")
-            if "=" in contenido:
-                var, expr = contenido.split("=", 1)
-                if "+" in expr and var in expr:  # Ej. "i=i+1" → "i++"
-                    codigo += f"{indent_actual}{var}++;\n"
-                else:
-                    codigo += f"{indent_actual}{bloque.contenido};\n"
-            else:
-                codigo += f"{indent_actual}{bloque.contenido};\n"
-
-        # --- DECISIÓN (IF/WHILE/FOR) ---
+        elif bloque.tipo == "fin":
+            codigo += f"{indent_actual}return 0;\n"
+            
+        # --- DECISIONES ---
         elif bloque.tipo == "decisión":
             condicion = bloque.contenido
-            tipo_ciclo = es_ciclo(bloque)
-
-            # Caso 1: Es un ciclo WHILE
-            if tipo_ciclo == "while":
+            # Verificar si es un ciclo while
+            es_while = any(
+                c.tipo == "si" and c.destino in diagrama[:i]
+                for c in conexiones
+                if c.origen == bloque
+            )
+            
+            if es_while:
                 codigo += f"{indent_actual}while ({condicion}) {{\n"
                 pila_estructuras.append("while")
-            
-            # Caso 2: Es un IF simple
             else:
                 codigo += f"{indent_actual}if ({condicion}) {{\n"
                 pila_estructuras.append("if")
+                
+                # Procesar bloques SI
+                for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "si"]:
+                    if conexion.destino.tipo == "proceso":
+                        codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
+                    elif conexion.destino.tipo == "salida":
+                        codigo += f"{indent_actual}    printf(\"%d\\n\", {conexion.destino.contenido});\n"
+                    bloques_procesados.add(conexion.destino)
+                
+                codigo += f"{indent_actual}}} else {{\n"
+                
+                # Procesar bloques NO
+                for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "no"]:
+                    if conexion.destino.tipo == "proceso":
+                        codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
+                    elif conexion.destino.tipo == "salida":
+                        codigo += f"{indent_actual}    printf(\"%d\\n\", {conexion.destino.contenido});\n"
+                    bloques_procesados.add(conexion.destino)
+                
+                codigo += f"{indent_actual}}}\n"
+                pila_estructuras.pop()  # Sacar el if de la pila
 
-        # --- CIERRE DE ESTRUCTURAS ---
-        # (Cuando encontramos un bloque que no pertenece al if/while actual)
-        if pila_estructuras and (i == len(diagrama) - 1 or diagrama[i+1] not in bloque.si + bloque.no):
+        # Cierre de estructuras
+        if pila_estructuras and (i == len(diagrama)-1 or diagrama[i+1] not in [c.destino for c in conexiones if c.origen == bloque]):
             estructura = pila_estructuras.pop()
             codigo += f"{indent * len(pila_estructuras)}}}\n"
-            if estructura == "if" and bloque.no:
-                codigo += f"{indent * len(pila_estructuras)}else {{\n"
-                pila_estructuras.append("else")
 
         i += 1
 
-    # --- DECLARAR VARIABLES NO INICIALIZADAS ---
+    # Asegurar declaración de variables
     vars_usadas = set()
     for bloque in diagrama:
-        if bloque.tipo in ["entrada", "proceso", "salida"] and bloque.contenido:
-            # Extraer variables (ej. "suma = total + 1" → ["suma", "total"])
-            for token in bloque.contenido.replace(";", "").split():
+        if bloque.contenido:
+            for token in bloque.contenido.split():
                 if token.isidentifier() and token not in ["printf", "scanf"]:
                     vars_usadas.add(token)
-
+    
     declaraciones = ""
     for var in vars_usadas:
         if var not in variables_declaradas:
             declaraciones += f"{indent}int {var};\n"
-
+    
     codigo = codigo.replace("#include <stdio.h>\n\nint main() {\n", 
                         f"#include <stdio.h>\n\nint main() {{\n{declaraciones}")
 
@@ -366,6 +362,22 @@ def mostrar_codigo_c(codigo):
     texto_c = scrolledtext.ScrolledText(ventana_c, font=("Courier", 10), bg="black", fg="lime", insertbackground="white")
     texto_c.pack(fill="both", expand=True)
     texto_c.insert(tk.END, codigo)
+
+def on_generar_c_click():
+    try:
+        if not diagrama:
+            raise ValueError("El diagrama está vacío")
+        
+        codigo = generar_codigo_c()
+        if not codigo.strip():
+            raise ValueError("No se generó código válido")
+            
+        mostrar_codigo_c(codigo)
+    except Exception as e:
+        ventana_error = Toplevel()
+        ventana_error.title("Error")
+        ventana_error.geometry("300x100")
+        tk.Label(ventana_error, text=f"Error al generar código:\n{str(e)}", fg="red").pack()
 
 def generar_codigo_asm():
     asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"
@@ -517,7 +529,7 @@ btn_guardar.place(x=130, y=50)
 btn_cargar = tk.Button(ventana, text="Cargar", command=cargar_diagrama, bg="blue", fg="white", font=("Arial", 10, "bold"))
 btn_cargar.place(x=230, y=50)
 
-btn_c = tk.Button(ventana, text="Generar C", command=generar_codigo_c, bg="gold", fg="black", font=("Arial", 10, "bold"))
+btn_c = tk.Button(ventana, text="Generar C", command=on_generar_c_click, bg="gold", fg="black", font=("Arial", 10, "bold"))
 btn_c.place(x=350, y=50)
 
 btn_asm = tk.Button(ventana, text="Generar ASM", command=generar_codigo_asm, bg="orange", fg="black", font=("Arial", 10, "bold"))
