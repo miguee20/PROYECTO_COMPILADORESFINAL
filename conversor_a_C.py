@@ -294,32 +294,34 @@ def generar_codigo_c():
             codigo += f"{indent * len(pila_estructuras)}int {var};\n"
             variables_declaradas.add(var)
 
-    def detectar_for(bloque, i, conexiones):
-        # El bloque debe ser una decisión tipo "i < n"
-        if bloque.tipo != "decisión" or i < 1:
+    def detectar_for(bloque_decision, bloque_anterior, conexiones):
+        if bloque_decision.tipo != "decisión":
             return False
 
-        init_bloque = diagrama[i - 1]
-        if init_bloque.tipo != "proceso":
-            return False
+        # Verificar si el bloque anterior es una inicialización (ej: "i=0")
+        if (bloque_anterior and bloque_anterior.tipo == "proceso" and 
+            "=" in bloque_anterior.contenido):
+            var_init = bloque_anterior.contenido.split("=")[0].strip()
 
-        init_contenido = init_bloque.contenido.replace(" ", "")
-        if "=" not in init_contenido:
-            return False
-
-        var_init, val_init = init_contenido.split("=")
-        var = var_init.strip()
-
-        # Verifica que en la conexión "no" haya un incremento de la misma variable
-        for c in conexiones:
-            if c.origen == bloque and c.tipo == "no":
-                destino = c.destino
-                if destino.tipo == "proceso":
-                    contenido = destino.contenido.replace(" ", "")
-                    if contenido.startswith(f"{var}=") and (
-                        "+1" in contenido or "++" in contenido
-                    ):
+            # Buscar incremento en la conexión "NO" (ej: "i++")
+            for conexion in conexiones:
+                if (conexion.origen == bloque_decision and conexion.tipo == "no" and 
+                    conexion.destino.tipo == "proceso"):
+                    contenido = conexion.destino.contenido.lower()
+                    if (f"{var_init}++" in contenido or 
+                        f"{var_init} = {var_init} + 1" in contenido.replace(" ", "")):
                         return True
+        return False
+    
+    def detectar_while(bloque_decision, diagrama, conexiones):
+        if bloque_decision.tipo != "decisión":
+            return False
+
+        # Verificar si alguna conexión "SÍ" apunta a un bloque anterior (bucle)
+        for conexion in conexiones:
+            if (conexion.origen == bloque_decision and conexion.tipo == "si" and 
+                diagrama.index(conexion.destino) < diagrama.index(bloque_decision)):
+                return True
         return False
 
 
@@ -355,49 +357,31 @@ def generar_codigo_c():
             
         # --- ESTRUCTURAS DE CONTROL ---
         elif bloque.tipo == "decisión":
-            condicion = bloque.contenido
-
             # Detectar FOR
-            if detectar_for(bloque, i, conexiones):
-                init_bloque = diagrama[i - 1]
+            if i > 0 and detectar_for(bloque, diagrama[i-1], conexiones):
+                init_bloque = diagrama[i-1]
                 var, val = init_bloque.contenido.replace(" ", "").split("=")
+                condicion = bloque.contenido
                 codigo += f"{indent_actual}for ({var} = {val}; {condicion}; {var}++) {{\n"
                 pila_estructuras.append("for")
-                bloques_procesados.add(diagrama[i - 1])  # i = 0
-                # Bloque de incremento (como i++)
+                bloques_procesados.add(diagrama[i-1])  # Marcar inicialización como procesada
+                
+                # Marcar incremento (conexión NO)
                 for conexion in conexiones:
                     if conexion.origen == bloque and conexion.tipo == "no":
                         bloques_procesados.add(conexion.destino)
-                i += 1  # Saltar el init_bloque ya procesado
+                i += 1  # Saltar bloque de inicialización
 
-            # Detectar WHILE (si hay conexión "si" hacia atrás)
-            elif any(
-                c.tipo == "si" and diagrama.index(c.destino) < i
-                for c in conexiones if c.origen == bloque
-            ):
+            # Detectar WHILE
+            elif detectar_while(bloque, diagrama, conexiones):
+                condicion = bloque.contenido
                 codigo += f"{indent_actual}while ({condicion}) {{\n"
                 pila_estructuras.append("while")
 
-            # IF normal
+            # IF-ELSE normal
             else:
-                codigo += f"{indent_actual}if ({condicion}) {{\n"
+                codigo += f"{indent_actual}if ({bloque.contenido}) {{\n"
                 pila_estructuras.append("if")
-
-                for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "si"]:
-                    if conexion.destino.tipo in ["proceso", "salida"]:
-                        codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
-                    bloques_procesados.add(conexion.destino)
-
-                codigo += f"{indent_actual}}} else {{\n"
-
-                for conexion in [c for c in conexiones if c.origen == bloque and c.tipo == "no"]:
-                    if conexion.destino.tipo in ["proceso", "salida"]:
-                        codigo += f"{indent_actual}    {conexion.destino.contenido};\n"
-                    bloques_procesados.add(conexion.destino)
-
-                codigo += f"{indent_actual}}}\n"
-                pila_estructuras.pop()
-
 
         # Cierre de estructuras
         # Cierre de estructuras si no hay continuación lógica
