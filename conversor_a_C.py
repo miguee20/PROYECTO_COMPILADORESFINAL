@@ -60,23 +60,63 @@ def agregar_bloque(tipo):
 
 def dibujar_bloques():
     canvas.delete("all")
-    for i, bloque in enumerate(diagrama):
-        x, y = bloque.x, bloque.y
-        if bloque.tipo == 'inicio' or bloque.tipo == 'fin':
-            bloque.canvas_id = canvas.create_oval(x, y, x+100, y+50, fill="lightblue")
-        elif bloque.tipo == 'decisión':
+
+    # Medidas básicas de cada bloque
+    ANCHO, ALTO = 100, 50
+    SESGO = 15        # “Inclinación” del paralelogramo (cuánto se desplaza la esquina)
+
+    for bloque in diagrama:
+        x, y   = bloque.x, bloque.y
+        tipo   = bloque.tipo.lower()   # normalizamos a minúsculas
+
+        # INICIO / FIN  → óvalo
+        if tipo in ("inicio", "fin"):
+            bloque.canvas_id = canvas.create_oval(
+                x, y, x + ANCHO, y + ALTO,
+                fill="lightblue"
+            )
+
+        # PROCESO → rectángulo
+        elif tipo == "proceso":
+            bloque.canvas_id = canvas.create_rectangle(
+                x, y, x + ANCHO, y + ALTO,
+                fill="lightgreen"
+            )
+
+        # ENTRADA / SALIDA → paralelogramo
+        elif tipo in ("entrada", "salida", "entrada/salida"):
             bloque.canvas_id = canvas.create_polygon(
-                x+50, y,
-                x+100, y+25,
-                x+50, y+50,
-                x, y+25,
+                x + SESGO, y,                 # vértice superior izquierdo “desplazado”
+                x + ANCHO, y,                # vértice superior derecho
+                x + ANCHO - SESGO, y + ALTO, # vértice inferior derecho “desplazado hacia la izquierda”
+                x, y + ALTO,                 # vértice inferior izquierdo
+                fill="plum1"
+            )
+
+        # DECISIÓN → rombo
+        elif tipo == "decisión":
+            bloque.canvas_id = canvas.create_polygon(
+                x + ANCHO / 2, y,                 # punta superior
+                x + ANCHO,     y + ALTO / 2,      # punta derecha
+                x + ANCHO / 2, y + ALTO,          # punta inferior
+                x,             y + ALTO / 2,      # punta izquierda
                 fill="gold"
             )
-        else:
-            bloque.canvas_id = canvas.create_rectangle(x, y, x+100, y+50, fill="lightgreen")
 
-        texto = bloque.tipo.upper() if not bloque.contenido else bloque.contenido
-        bloque.text_id = canvas.create_text(x+50, y+25, text=texto, font=("Arial", 9, "bold"))
+        # Otros tipos → rectángulo gris claro (fallback)
+        else:
+            bloque.canvas_id = canvas.create_rectangle(
+                x, y, x + ANCHO, y + ALTO,
+                fill="gray85"
+            )
+
+        # Texto centrado dentro de la figura
+        texto = bloque.contenido or bloque.tipo.upper()
+        bloque.text_id = canvas.create_text(
+            x + ANCHO / 2, y + ALTO / 2,
+            text=texto,
+            font=("Arial", 9, "bold")
+        )
 
         # Dibujar puertos solo si el bloque está seleccionado
     if bloque_seleccionado:
@@ -104,7 +144,6 @@ def dibujar_bloques():
             x1 = conexion.origen.x + 50
             y1 = conexion.origen.y + 50
 
-        # Punto final
         # Punto final (posición de entrada al destino)
         if conexion.tipo == "si":
             x2 = conexion.destino.x  # lado izquierdo
@@ -220,45 +259,106 @@ def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
     indent = "    "
     variables_declaradas = set()
+    pila_estructuras = []  # Para manejar anidamiento (if/for/while)
+    bloques_visitados = set()  # Evitar procesar bloques múltiples veces
 
-    for bloque in diagrama:
-        if bloque.tipo == "inicio":
+    # Función para declarar variables automáticamente
+    def declarar_variable(var):
+        nonlocal codigo
+        if var not in variables_declaradas:
+            codigo += f"{indent * len(pila_estructuras)}int {var};\n"
+            variables_declaradas.add(var)
+
+    # Analizar conexiones para detectar ciclos
+    def es_ciclo(bloque):
+        # Verificar si alguna conexión "Sí" vuelve a un bloque anterior (while)
+        for conexion in conexiones:
+            if conexion.origen == bloque and conexion.tipo == "si":
+                if conexion.destino in diagrama[:diagrama.index(bloque)]:
+                    return "while"
+        return None
+
+    # Procesar cada bloque del diagrama
+    i = 0
+    while i < len(diagrama):
+        bloque = diagrama[i]
+        if bloque in bloques_visitados:
+            i += 1
             continue
-        elif bloque.tipo == "entrada":
-            if bloque.contenido not in variables_declaradas:
-                codigo += f"{indent}int {bloque.contenido};\n"
-                variables_declaradas.add(bloque.contenido)
-            codigo += f"{indent}scanf(\"%d\", &{bloque.contenido});\n"
-        elif bloque.tipo == "proceso":
-            codigo += f"{indent}{bloque.contenido};\n"
-        elif bloque.tipo == "salida":
-            codigo += f"{indent}printf(\"%d\\n\", {bloque.contenido});\n"
-        elif bloque.tipo == "decisión":
-            condicion = bloque.contenido.strip()
-            if any(op in condicion for op in ['<', '>', '==', '!=', '<=', '>=']):
-                codigo += f"{indent}if ({condicion}) {{\n"
-            else:
-                codigo += f"{indent}// Revisa esta condición: {condicion}\n"
-                codigo += f"{indent}if ({condicion}) {{\n"
+        bloques_visitados.add(bloque)
 
-            for si_bloque in bloque.si:
-                if si_bloque.tipo == "proceso":
-                    codigo += f"{indent*2}{si_bloque.contenido};\n"
-                elif si_bloque.tipo == "salida":
-                    codigo += f"{indent*2}printf(\"%d\\n\", {si_bloque.contenido});\n"
-            codigo += f"{indent}}} else {{\n"
-            for no_bloque in bloque.no:
-                if no_bloque.tipo == "proceso":
-                    codigo += f"{indent*2}{no_bloque.contenido};\n"
-                elif no_bloque.tipo == "salida":
-                    codigo += f"{indent*2}printf(\"%d\\n\", {no_bloque.contenido});\n"
-            codigo += f"{indent}}}\n"
+        indent_actual = indent * len(pila_estructuras)
+
+        # --- INICIO/FIN ---
+        if bloque.tipo == "inicio":
+            pass  # No necesita código
         elif bloque.tipo == "fin":
-            codigo += f"{indent}return 0;\n"
+            codigo += f"{indent_actual}return 0;\n"
 
-    codigo += "}\n"
-    mostrar_codigo_c(codigo)
+        # --- ENTRADA/SALIDA ---
+        elif bloque.tipo == "entrada":
+            declarar_variable(bloque.contenido)
+            codigo += f"{indent_actual}scanf(\"%d\", &{bloque.contenido});\n"
+        elif bloque.tipo == "salida":
+            codigo += f"{indent_actual}printf(\"%d\\n\", {bloque.contenido});\n"
 
+        # --- PROCESO (ASIGNACIONES) ---
+        elif bloque.tipo == "proceso":
+            # Detectar si es parte de un for (ej. "i = i + 1")
+            contenido = bloque.contenido.replace(" ", "")
+            if "=" in contenido:
+                var, expr = contenido.split("=", 1)
+                if "+" in expr and var in expr:  # Ej. "i=i+1" → "i++"
+                    codigo += f"{indent_actual}{var}++;\n"
+                else:
+                    codigo += f"{indent_actual}{bloque.contenido};\n"
+            else:
+                codigo += f"{indent_actual}{bloque.contenido};\n"
+
+        # --- DECISIÓN (IF/WHILE/FOR) ---
+        elif bloque.tipo == "decisión":
+            condicion = bloque.contenido
+            tipo_ciclo = es_ciclo(bloque)
+
+            # Caso 1: Es un ciclo WHILE
+            if tipo_ciclo == "while":
+                codigo += f"{indent_actual}while ({condicion}) {{\n"
+                pila_estructuras.append("while")
+            
+            # Caso 2: Es un IF simple
+            else:
+                codigo += f"{indent_actual}if ({condicion}) {{\n"
+                pila_estructuras.append("if")
+
+        # --- CIERRE DE ESTRUCTURAS ---
+        # (Cuando encontramos un bloque que no pertenece al if/while actual)
+        if pila_estructuras and (i == len(diagrama) - 1 or diagrama[i+1] not in bloque.si + bloque.no):
+            estructura = pila_estructuras.pop()
+            codigo += f"{indent * len(pila_estructuras)}}}\n"
+            if estructura == "if" and bloque.no:
+                codigo += f"{indent * len(pila_estructuras)}else {{\n"
+                pila_estructuras.append("else")
+
+        i += 1
+
+    # --- DECLARAR VARIABLES NO INICIALIZADAS ---
+    vars_usadas = set()
+    for bloque in diagrama:
+        if bloque.tipo in ["entrada", "proceso", "salida"] and bloque.contenido:
+            # Extraer variables (ej. "suma = total + 1" → ["suma", "total"])
+            for token in bloque.contenido.replace(";", "").split():
+                if token.isidentifier() and token not in ["printf", "scanf"]:
+                    vars_usadas.add(token)
+
+    declaraciones = ""
+    for var in vars_usadas:
+        if var not in variables_declaradas:
+            declaraciones += f"{indent}int {var};\n"
+
+    codigo = codigo.replace("#include <stdio.h>\n\nint main() {\n", 
+                        f"#include <stdio.h>\n\nint main() {{\n{declaraciones}")
+
+    return codigo
 def mostrar_codigo_c(codigo):
     ventana_c = Toplevel()
     ventana_c.title("Código en C")
