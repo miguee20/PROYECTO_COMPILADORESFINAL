@@ -346,13 +346,11 @@ def generar_codigo_c():
                 if contenido == f"{var}++" or contenido == f"{var}+=1":
                     return True
 
-
             # Seguir por las conexiones salientes normales
             siguientes = [c.destino for c in conexiones if c.origen == bloque_actual and c.tipo == "normal"]
             return any(contiene_incremento(b, visitados) for b in siguientes)
 
         return contiene_incremento(destino_si)
-
 
     i = 0
     while i < len(diagrama):
@@ -377,19 +375,17 @@ def generar_codigo_c():
 
         elif bloque.tipo == "proceso":
             if bloque.contenido is None:
-                continue  # o podrías poner pass si quieres dejarlo vacío
+                continue
             contenido = bloque.contenido.replace(" ", "")
             if any(op in contenido for op in ["=", "+=", "-="]):
                 if "+1" in contenido or "++" in contenido:
                     var = contenido.split("=")[0]
-                    # Evitar duplicar incremento si ya está en un for
                     if not (pila_estructuras and pila_estructuras[-1] == "for" and f"{var}++" in contenido):
                         codigo += f"{indent}{var}++;\n"
                 else:
                     codigo += f"{indent}{bloque.contenido};\n"
             else:
                 codigo += f"{indent}{bloque.contenido};\n"
-
 
         elif bloque.tipo == "salida":
             codigo += f"{indent}printf(\"%d\\n\", {bloque.contenido});\n"
@@ -399,7 +395,6 @@ def generar_codigo_c():
                 codigo += f"{indent}}}\n"
                 pila_estructuras.pop()
             codigo += f"{indent}return 0;\n"
-
 
         elif bloque.tipo == "decisión":
             condicion = bloque.contenido.strip()
@@ -413,7 +408,7 @@ def generar_codigo_c():
                 bloques_procesados.add(init_bloque)
                 bloques_procesados.add(bloque)
 
-                # También marcar como procesado el bloque que contiene el incremento (i++), para que no se repita dentro del for
+                # También marcar como procesado el bloque que contiene el incremento
                 destino_si = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "si"), None)
                 if destino_si:
                     siguientes = [c.destino for c in conexiones if c.origen == destino_si and c.tipo == "normal"]
@@ -424,15 +419,18 @@ def generar_codigo_c():
                 i += 1
                 continue
 
+            # Detectar while solo si hay una conexión que vuelve hacia atrás
+            # Detectar while si hay una conexión que regresa al mismo bloque de decisión
+            es_while = any(
+                c.destino == bloque and diagrama.index(c.origen) > i
+                for c in conexiones if c.tipo == "normal"
+            )
 
-            elif any(
-                c.tipo == "normal" and c.destino == bloque
-                for c in conexiones
-            ):
+
+            if es_while:
                 codigo += f"{indent}while ({condicion}) {{\n"
                 pila_estructuras.append("while")
                 continue
-
 
             # IF con posible anidamiento
             else:
@@ -454,7 +452,6 @@ def generar_codigo_c():
                 codigo += f"{indent}}}\n"
                 pila_estructuras.pop()
                 continue
-
 
         proximos = [c.destino for c in conexiones if c.origen == bloque]
         if not proximos or (i + 1 < len(diagrama) and diagrama[i + 1] not in proximos):
@@ -515,18 +512,36 @@ def on_generar_c_click():
         tk.Label(ventana_error, text=f"Error al generar código:\n{str(e)}", fg="red").pack()
 
 def generar_codigo_asm():
-    asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"  # comentada, esta linea es para el normal sin nasm
-    #asm = ".MODEL small\n.STACK 100h\n.DATA\n" # linea para que funcione con nasm iniciado
+    asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"
     variables = set()
     mensajes = []
     etiquetas = {}
     asm_instrucciones = []
 
-    # Crear etiquetas únicas para cada bloque
+    def detectar_for_asm(i):
+        if i < 2:
+            return False
+        bloque_decision = diagrama[i]
+        bloque_init = diagrama[i - 2]
+        bloque_incremento = diagrama[i + 1] if i + 1 < len(diagrama) else None
+
+        if not (bloque_decision.tipo == "decisión" and
+                bloque_init.tipo == "proceso" and
+                bloque_incremento and bloque_incremento.tipo == "proceso"):
+            return False
+
+        cond = bloque_decision.contenido.replace(" ", "")
+        if "<" not in cond and "<=" not in cond:
+            return False
+        var_cond = cond.split("<")[0] if "<" in cond else cond.split("<=")[0]
+        var_cond = var_cond.strip()
+
+        inc_text = bloque_incremento.contenido.replace(" ", "")
+        return inc_text in [f"{var_cond}++", f"{var_cond}+=1", f"{var_cond}={var_cond}+1"]
+
     for i, bloque in enumerate(diagrama):
         etiquetas[bloque] = f"ETQ_{i}"
 
-    # Recopilar variables y cadenas
     for bloque in diagrama:
         if bloque.contenido:
             if bloque.tipo in ["entrada", "proceso"]:
@@ -549,40 +564,58 @@ def generar_codigo_asm():
     asm += ".CODE\nMAIN:\n"
     asm += "    MOV AX, @DATA\n    MOV DS, AX\n"
 
-    # Construir el cuerpo del programa
-    for bloque in diagrama:
+    for i, bloque in enumerate(diagrama):
         asm_instrucciones.append(f"{etiquetas[bloque]}:")
 
         if bloque.tipo == "entrada" and bloque.contenido:
-            contenido = bloque.contenido.strip()
-            if "=" in contenido:
-                var, val = contenido.replace(" ", "").split("=")
-                asm_instrucciones.append(f"    MOV {var}, {val} ; entrada fija")
+            var, val = bloque.contenido.replace(" ", "").split("=")
+            asm_instrucciones.append(f"    MOV {var}, {val} ; entrada fija")
 
         elif bloque.tipo == "proceso" and bloque.contenido:
-            if "printf" in bloque.contenido:
+            contenido = bloque.contenido.strip()
+            if "printf" in contenido:
+                tokens = contenido.replace("printf(", "").replace(")", "").split(",")
+                mensaje = tokens[0].replace('"', '').strip()
+                var_impresa = tokens[1].strip() if len(tokens) > 1 else None
                 for b, label, msg in mensajes:
-                    if b == bloque:
+                    if msg == mensaje:
                         asm_instrucciones.append(f"    LEA DX, {label}")
                         asm_instrucciones.append(f"    MOV AH, 09H")
                         asm_instrucciones.append(f"    INT 21H")
                         break
-            else:
-                contenido = bloque.contenido.replace(" ", "")
-                if "=" in contenido:
-                    var_dest, expr = contenido.split("=")
-                    if "+" in expr:
-                        op1, op2 = expr.split("+")
-                        asm_instrucciones.append(f"    MOV AL, {op1}")
-                        asm_instrucciones.append(f"    ADD AL, {op2}")
-                        asm_instrucciones.append(f"    MOV {var_dest}, AL")
-                    elif "-" in expr:
-                        op1, op2 = expr.split("-")
-                        asm_instrucciones.append(f"    MOV AL, {op1}")
-                        asm_instrucciones.append(f"    SUB AL, {op2}")
-                        asm_instrucciones.append(f"    MOV {var_dest}, AL")
-                    else:
-                        asm_instrucciones.append(f"    MOV {var_dest}, {expr}")
+                if var_impresa:
+                    asm_instrucciones.append(f"    MOV AL, {var_impresa}")
+                    asm_instrucciones.append(f"    ADD AL, 30h")
+                    asm_instrucciones.append(f"    MOV DL, AL")
+                    asm_instrucciones.append(f"    MOV AH, 02H")
+                    asm_instrucciones.append(f"    INT 21H")
+                    asm_instrucciones.append(f"    MOV DL, 13")
+                    asm_instrucciones.append(f"    MOV AH, 02H")
+                    asm_instrucciones.append(f"    INT 21H")
+                    asm_instrucciones.append(f"    MOV DL, 10")
+                    asm_instrucciones.append(f"    MOV AH, 02H")
+                    asm_instrucciones.append(f"    INT 21H")
+            elif contenido.endswith("++") or "+=1" in contenido:
+                var = contenido.replace("++", "").replace("+=1", "").strip()
+                asm_instrucciones.append(f"    MOV AL, {var}")
+                asm_instrucciones.append(f"    INC AL")
+                asm_instrucciones.append(f"    MOV {var}, AL")
+            elif "=" in contenido:
+                var_dest, expr = contenido.split("=")
+                var_dest = var_dest.strip()
+                expr = expr.strip()
+                if "+" in expr:
+                    op1, op2 = expr.split("+")
+                    asm_instrucciones.append(f"    MOV AL, {op1.strip()}")
+                    asm_instrucciones.append(f"    ADD AL, {op2.strip()}")
+                    asm_instrucciones.append(f"    MOV {var_dest}, AL")
+                elif "-" in expr:
+                    op1, op2 = expr.split("-")
+                    asm_instrucciones.append(f"    MOV AL, {op1.strip()}")
+                    asm_instrucciones.append(f"    SUB AL, {op2.strip()}")
+                    asm_instrucciones.append(f"    MOV {var_dest}, AL")
+                else:
+                    asm_instrucciones.append(f"    MOV {var_dest}, {expr}")
 
         elif bloque.tipo == "salida" and bloque.contenido:
             for b, label, msg in mensajes:
@@ -594,40 +627,44 @@ def generar_codigo_asm():
 
         elif bloque.tipo == "decisión" and bloque.contenido:
             condicion = bloque.contenido.replace(" ", "")
-
-            # Operadores compatibles
-            operadores = {
-                ">":  "JG",
-                "<":  "JL",
-                ">=": "JGE",
-                "<=": "JLE",
-                "==": "JE",
-                "!=": "JNE"
-            }
-
-            operador_encontrado = None
-            for op in sorted(operadores.keys(), key=lambda x: -len(x)):  # Detecta operadores de 2 caracteres primero
-                if op in condicion:
-                    operador_encontrado = op
-                    break
+            operadores = {">": "JG", "<": "JL", ">=": "JGE", "<=": "JLE", "==": "JE", "!=": "JNE"}
+            operador_encontrado = next((op for op in sorted(operadores, key=lambda x: -len(x)) if op in condicion), None)
 
             if operador_encontrado:
                 var, val = condicion.split(operador_encontrado)
                 var = var.strip()
                 val = val.strip()
-                asm_instrucciones.append(f"    MOV AL, {var}")
-                asm_instrucciones.append(f"    CMP AL, {val}")
-                jmp_op = operadores[operador_encontrado]
-
                 destino_si = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "si"), None)
                 destino_no = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "no"), None)
 
-                if destino_si:
-                    asm_instrucciones.append(f"    {jmp_op} {etiquetas[destino_si]}")
-                if destino_no:
+                if detectar_for_asm(i):
+                    asm_instrucciones.append(f"    JMP {etiquetas[bloque]}_COND")
+                    if destino_si:
+                        asm_instrucciones.append(f"{etiquetas[destino_si]}:")
+                    siguiente = next((c.destino for c in conexiones if c.origen == destino_si and c.tipo == "normal"), None)
+                    if siguiente:
+                        asm_instrucciones.append(f"    JMP {etiquetas[bloque]}_COND")
+                    asm_instrucciones.append(f"{etiquetas[bloque]}_COND:")
+                    asm_instrucciones.append(f"    MOV AL, {var}")
+                    asm_instrucciones.append(f"    CMP AL, {val}")
+                    asm_instrucciones.append(f"    {operadores[operador_encontrado]} {etiquetas[destino_si]}")
                     asm_instrucciones.append(f"    JMP {etiquetas[destino_no]}")
-                continue
+                    continue
 
+                es_while = any(c.destino == bloque and diagrama.index(c.origen) > i for c in conexiones if c.tipo == "normal")
+                if es_while:
+                    asm_instrucciones.append(f"{etiquetas[bloque]}_WHILE:")
+                    asm_instrucciones.append(f"    MOV AL, {var}")
+                    asm_instrucciones.append(f"    CMP AL, {val}")
+                    asm_instrucciones.append(f"    {operadores[operador_encontrado]} {etiquetas[destino_si]}")
+                    asm_instrucciones.append(f"    JMP {etiquetas[destino_no]}")
+                    continue
+
+                asm_instrucciones.append(f"    MOV AL, {var}")
+                asm_instrucciones.append(f"    CMP AL, {val}")
+                asm_instrucciones.append(f"    {operadores[operador_encontrado]} {etiquetas[destino_si]}")
+                asm_instrucciones.append(f"    JMP {etiquetas[destino_no]}")
+                continue
 
         siguiente = next((c.destino for c in conexiones if c.origen == bloque and c.tipo in ["normal", "si", "no"]), None)
         if siguiente:
@@ -641,6 +678,7 @@ def generar_codigo_asm():
 
     mostrar_codigo_asm(asm)
     return asm
+
 
 def generar_y_abrir_con_emu8086():
     try:
@@ -664,7 +702,7 @@ def generar_y_abrir_con_emu8086():
         ventana_error.geometry("300x100")
         tk.Label(ventana_error, text=f"Error:\n{str(e)}", fg="red").pack()
 
-
+# esta de ejecutar asm no se usa por ahora
 def ejecutar_asm():
     try:
         if not diagrama:
@@ -1040,4 +1078,3 @@ barra_estado = tk.Label(
 barra_estado.pack(fill=tk.X, padx=5, pady=(0,5))
 
 ventana.mainloop()
-
