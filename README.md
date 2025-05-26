@@ -3,8 +3,8 @@
 # Diagrama de Flujo a Código C y ASM (Compiladores)
 
 ## Integrantes del Proyecto
-- Karen Laines
 - Miguel Salguero
+- Karen Laines
 - Josue Orozco
 - Julio Cáceres
 
@@ -44,18 +44,18 @@ cd PROYECTO_COMPILADORESFINAL
 python conversor_a_C_10.py
 
 # USO BÁSICO
-# - Botones superiores: agregar bloques al diagrama
-# - Arrastrar bloques para moverlos
-# - Click en puertos (puntos negros) para conectar bloques
-# - Doble click en un bloque para editarlo
-# - Ctrl + Rueda del mouse para hacer zoom
+- Botones superiores: agregar bloques al diagrama
+- Arrastrar bloques para moverlos
+- Click en puertos (puntos negros) para conectar bloques
+- Doble click en un bloque para editarlo
+- Ctrl + Rueda del mouse para hacer zoom
 
 # EJEMPLO DE USO
-# 1. Crear diagrama: inicio → entrada → proceso → decisión → salida → fin
-# 2. Conectar bloques arrastrando desde los puertos
-# 3. Click en "Generar C" para ver código equivalente
-# 4. Validar diagrama con el botón correspondiente
-# 5. Guardar diagrama para uso futuro
+1. Crear diagrama: inicio → entrada → proceso → decisión → salida → fin
+2. Conectar bloques arrastrando desde los puertos
+3. Click en "Generar C" para ver código equivalente
+4. Validar diagrama con el botón correspondiente
+5. Guardar diagrama para uso futuro
 
 # Uso de diagramas creados
 Ya que el programa lee los diagramas como archivos json, los diagramas de ejemplo guardados en la carpeta "proyecto_compiladores" son funcionales.
