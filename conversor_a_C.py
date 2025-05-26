@@ -3,6 +3,11 @@ from tkinter import simpledialog, Toplevel, scrolledtext
 import pickle
 from tkinter import filedialog
 import json
+import os
+import subprocess
+import tempfile
+import sys
+
 
 # Clase para los bloques
 class Bloque:
@@ -118,6 +123,14 @@ def dibujar_bloques():
             font=("Arial", 9, "bold")
         )
 
+
+    # Modifica esta parte en dibujar_bloques():
+    if bloque == bloque_seleccionado:
+        # Dibujar borde resaltado
+        canvas.create_rectangle(
+            x-3, y-3, x + ANCHO+3, y + ALTO+3,
+            outline="blue", width=3, dash=(3,3)
+        )
         # Dibujar puertos solo si el bloque está seleccionado
     if bloque_seleccionado:
         for dx, dy in [(50, 0), (50, 50), (0, 25), (100, 25)]:  # arriba, abajo, izquierda, derecha
@@ -184,15 +197,24 @@ conexiones = []  # Lista de tuplas (bloque_origen, bloque_destino)
 moviendo_bloque = None
 def on_canvas_click(event):
     global moviendo_bloque, bloque_seleccionado, arrastrando_desde_puerto
-
+    
+    # Verificar si es doble clic (edición)
+    if event.num == 1 and event.type == tk.EventType.ButtonPress and event.time - getattr(on_canvas_click, 'last_click', 0) < 300:
+        editar_bloque()
+        on_canvas_click.last_click = 0
+        return
+    
+    on_canvas_click.last_click = event.time
+    
+    # Resto del código original...
     if arrastrando_desde_puerto:
-        return  # Evitar mover bloques si estamos arrastrando desde un puerto
-
+        return
+    
     click_x = canvas.canvasx(event.x)
     click_y = canvas.canvasy(event.y)
     bloque_seleccionado = None
     moviendo_bloque = None
-
+    
     for bloque in diagrama:
         x1, y1 = bloque.x, bloque.y
         x2, y2 = x1 + 100, y1 + 50
@@ -200,7 +222,7 @@ def on_canvas_click(event):
             moviendo_bloque = bloque
             bloque_seleccionado = bloque
             break
-
+    
     dibujar_bloques()
 
 
@@ -285,45 +307,51 @@ def generar_codigo_c():
     codigo = "#include <stdio.h>\n\nint main() {\n"
     indent = "    "
     variables_declaradas = set()
-    pila_estructuras = []  # Para manejar anidamiento
+    pila_estructuras = []
     bloques_procesados = set()
 
     def declarar_variable(var):
         nonlocal codigo
         if var not in variables_declaradas and var.isidentifier():
-            codigo += f"{indent * len(pila_estructuras)}int {var};\n"
+            codigo += f"{indent}int {var};\n"
             variables_declaradas.add(var)
 
-    def detectar_for(bloque_decision, bloque_anterior, conexiones):
-        if bloque_decision.tipo != "decisión":
+    def detectar_for(bloque, i, conexiones):
+        if bloque.tipo != "decisión" or i < 1:
+            return False
+        init_bloque = diagrama[i - 1]
+        if init_bloque.tipo != "proceso":
+            return False
+        init_contenido = init_bloque.contenido.replace(" ", "")
+        if "=" not in init_contenido:
+            return False
+        var_init, val_init = init_contenido.split("=")
+        var = var_init.strip()
+
+        # Buscar la conexión 'si' (cuerpo del bucle)
+        destino_si = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "si"), None)
+        if not destino_si:
             return False
 
-        # Verificar si el bloque anterior es una inicialización (ej: "i=0")
-        if (bloque_anterior and bloque_anterior.tipo == "proceso" and 
-            "=" in bloque_anterior.contenido):
-            var_init = bloque_anterior.contenido.split("=")[0].strip()
+        # Buscar dentro de la rama 'si' si hay un incremento del tipo i++ o i = i + 1
+        def contiene_incremento(bloque_actual, visitados=set()):
+            if bloque_actual in visitados:
+                return False
+            visitados.add(bloque_actual)
 
-            # Buscar incremento en la conexión "NO" (ej: "i++")
-            for conexion in conexiones:
-                if (conexion.origen == bloque_decision and conexion.tipo == "no" and 
-                    conexion.destino.tipo == "proceso"):
-                    contenido = conexion.destino.contenido.lower()
-                    if (f"{var_init}++" in contenido or 
-                        f"{var_init} = {var_init} + 1" in contenido.replace(" ", "")):
-                        return True
-        return False
-    
-    def detectar_while(bloque_decision, diagrama, conexiones):
-        if bloque_decision.tipo != "decisión":
-            return False
+            if bloque_actual.tipo == "proceso":
+                if bloque_actual.contenido is None:
+                    return False
+                contenido = bloque_actual.contenido.replace(" ", "")
+                if contenido == f"{var}++" or contenido == f"{var}+=1":
+                    return True
 
-        # Verificar si alguna conexión "SÍ" apunta a un bloque anterior (bucle)
-        for conexion in conexiones:
-            if (conexion.origen == bloque_decision and conexion.tipo == "si" and 
-                diagrama.index(conexion.destino) < diagrama.index(bloque_decision)):
-                return True
-        return False
 
+            # Seguir por las conexiones salientes normales
+            siguientes = [c.destino for c in conexiones if c.origen == bloque_actual and c.tipo == "normal"]
+            return any(contiene_incremento(b, visitados) for b in siguientes)
+
+        return contiene_incremento(destino_si)
 
 
     i = 0
@@ -332,85 +360,126 @@ def generar_codigo_c():
         if bloque in bloques_procesados:
             i += 1
             continue
-            
         bloques_procesados.add(bloque)
-        indent_actual = indent * len(pila_estructuras)
 
-        # --- BLOQUES BÁSICOS ---
         if bloque.tipo == "inicio":
             pass
+
         elif bloque.tipo == "entrada":
-            declarar_variable(bloque.contenido)
-            codigo += f"{indent_actual}scanf(\"%d\", &{bloque.contenido});\n"
+            contenido = bloque.contenido.strip()
+            if "=" in contenido:
+                var, val = contenido.replace(" ", "").split("=")
+                declarar_variable(var)
+                codigo += f"{indent}{var} = {val};\n"
+            else:
+                declarar_variable(contenido)
+                codigo += f"{indent}scanf(\"%d\", &{contenido});\n"
+
         elif bloque.tipo == "proceso":
-            # Optimizar i = i + 1 → i++
+            if bloque.contenido is None:
+                continue  # o podrías poner pass si quieres dejarlo vacío
             contenido = bloque.contenido.replace(" ", "")
-            if contenido.endswith("=i+1") or contenido.endswith("+=1"):
-                var = contenido.split("=")[0]
-                codigo += f"{indent_actual}{var}++;\n"
+            if any(op in contenido for op in ["=", "+=", "-="]):
+                if "+1" in contenido or "++" in contenido:
+                    var = contenido.split("=")[0]
+                    # Evitar duplicar incremento si ya está en un for
+                    if not (pila_estructuras and pila_estructuras[-1] == "for" and f"{var}++" in contenido):
+                        codigo += f"{indent}{var}++;\n"
+                else:
+                    codigo += f"{indent}{bloque.contenido};\n"
             else:
-                codigo += f"{indent_actual}{bloque.contenido};\n"
+                codigo += f"{indent}{bloque.contenido};\n"
+
+
         elif bloque.tipo == "salida":
-            codigo += f"{indent_actual}printf(\"%d\\n\", {bloque.contenido});\n"
+            codigo += f"{indent}printf(\"%d\\n\", {bloque.contenido});\n"
+
         elif bloque.tipo == "fin":
-            codigo += f"{indent_actual}return 0;\n"
-            
-        # --- ESTRUCTURAS DE CONTROL ---
+            while pila_estructuras:
+                codigo += f"{indent}}}\n"
+                pila_estructuras.pop()
+            codigo += f"{indent}return 0;\n"
+
+
         elif bloque.tipo == "decisión":
-            # Detectar FOR
-            if i > 0 and detectar_for(bloque, diagrama[i-1], conexiones):
-                init_bloque = diagrama[i-1]
+            condicion = bloque.contenido.strip()
+
+            # Detectar for
+            if detectar_for(bloque, i, conexiones):
+                init_bloque = diagrama[i - 1]
                 var, val = init_bloque.contenido.replace(" ", "").split("=")
-                condicion = bloque.contenido
-                codigo += f"{indent_actual}for ({var} = {val}; {condicion}; {var}++) {{\n"
+                codigo += f"{indent}for ({var} = {val}; {condicion}; {var}++) {{\n"
                 pila_estructuras.append("for")
-                bloques_procesados.add(diagrama[i-1])  # Marcar inicialización como procesada
-                
-                # Marcar incremento (conexión NO)
-                for conexion in conexiones:
-                    if conexion.origen == bloque and conexion.tipo == "no":
-                        bloques_procesados.add(conexion.destino)
-                i += 1  # Saltar bloque de inicialización
+                bloques_procesados.add(init_bloque)
+                bloques_procesados.add(bloque)
 
-            # Detectar WHILE
-            elif detectar_while(bloque, diagrama, conexiones):
-                condicion = bloque.contenido
-                codigo += f"{indent_actual}while ({condicion}) {{\n"
+                # También marcar como procesado el bloque que contiene el incremento (i++), para que no se repita dentro del for
+                destino_si = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "si"), None)
+                if destino_si:
+                    siguientes = [c.destino for c in conexiones if c.origen == destino_si and c.tipo == "normal"]
+                    for b in siguientes:
+                        if b.tipo == "proceso" and b.contenido.replace(" ", "") in [f"{var}++", f"{var}={var}+1"]:
+                            bloques_procesados.add(b)
+
+                i += 1
+                continue
+
+
+            elif any(
+                c.tipo == "normal" and c.destino == bloque
+                for c in conexiones
+            ):
+                codigo += f"{indent}while ({condicion}) {{\n"
                 pila_estructuras.append("while")
+                continue
 
-            # IF-ELSE normal
+
+            # IF con posible anidamiento
             else:
-                codigo += f"{indent_actual}if ({bloque.contenido}) {{\n"
+                codigo += f"{indent}if ({condicion}) {{\n"
                 pila_estructuras.append("if")
 
-        # Cierre de estructuras
-        # Cierre de estructuras si no hay continuación lógica
+                for c in [c for c in conexiones if c.origen == bloque and c.tipo == "si"]:
+                    if c.destino.tipo in ["proceso", "salida"]:
+                        codigo += f"{indent*2}{c.destino.contenido};\n"
+                        bloques_procesados.add(c.destino)
+
+                codigo += f"{indent}}} else {{\n"
+
+                for c in [c for c in conexiones if c.origen == bloque and c.tipo == "no"]:
+                    if c.destino.tipo in ["proceso", "salida"]:
+                        codigo += f"{indent*2}{c.destino.contenido};\n"
+                        bloques_procesados.add(c.destino)
+
+                codigo += f"{indent}}}\n"
+                pila_estructuras.pop()
+                continue
+
+
         proximos = [c.destino for c in conexiones if c.origen == bloque]
         if not proximos or (i + 1 < len(diagrama) and diagrama[i + 1] not in proximos):
             while pila_estructuras:
-                estructura = pila_estructuras.pop()
-                codigo += f"{indent * len(pila_estructuras)}}}\n"
-
+                codigo += f"{indent}}}\n"
+                pila_estructuras.pop()
 
         i += 1
 
-    # Declarar variables no inicializadas
     vars_usadas = set()
     for bloque in diagrama:
         if bloque.contenido:
-            for token in bloque.contenido.replace(";", "").split():
+            for token in bloque.contenido.replace(";", "").replace("=", " ").replace("+", " ").replace("-", " ").split():
                 if token.isidentifier() and token not in ["printf", "scanf"]:
                     vars_usadas.add(token)
-    
+
     declaraciones = ""
     for var in vars_usadas:
         if var not in variables_declaradas:
             declaraciones += f"{indent}int {var};\n"
-    
-    codigo = codigo.replace("#include <stdio.h>\n\nint main() {\n", 
-                        f"#include <stdio.h>\n\nint main() {{\n{declaraciones}")
 
+    codigo = codigo.replace("int main() {\n", f"int main() {{\n{declaraciones}")
+    codigo += "}\n"
     return codigo
+
 def mostrar_codigo_c(codigo):
     ventana_c = Toplevel()
     ventana_c.title("Código en C")
@@ -418,6 +487,16 @@ def mostrar_codigo_c(codigo):
     texto_c = scrolledtext.ScrolledText(ventana_c, font=("Courier", 10), bg="black", fg="lime", insertbackground="white")
     texto_c.pack(fill="both", expand=True)
     texto_c.insert(tk.END, codigo)
+
+
+def mostrar_salida_ejecucion(salida):
+    ventana_salida = Toplevel()
+    ventana_salida.title("Salida del programa")
+    ventana_salida.geometry("600x300")
+    texto_salida = scrolledtext.ScrolledText(ventana_salida, font=("Courier", 10), bg="black", fg="lime", insertbackground="white")
+    texto_salida.pack(fill="both", expand=True)
+    texto_salida.insert(tk.END, salida)
+
 
 def on_generar_c_click():
     try:
@@ -436,84 +515,190 @@ def on_generar_c_click():
         tk.Label(ventana_error, text=f"Error al generar código:\n{str(e)}", fg="red").pack()
 
 def generar_codigo_asm():
-    asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"
-    usados = []
+    asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"  # comentada, esta linea es para el normal sin nasm
+    #asm = ".MODEL small\n.STACK 100h\n.DATA\n" # linea para que funcione con nasm iniciado
+    variables = set()
+    mensajes = []
+    etiquetas = {}
+    asm_instrucciones = []
 
-    # Crear secciones de datos (para variables)
+    # Crear etiquetas únicas para cada bloque
+    for i, bloque in enumerate(diagrama):
+        etiquetas[bloque] = f"ETQ_{i}"
+
+    # Recopilar variables y cadenas
     for bloque in diagrama:
-        if bloque.tipo == "entrada":
-            if bloque.contenido not in usados:
-                asm += f"    {bloque.contenido} DB 0\n"
-                usados.append(bloque.contenido)
-        elif bloque.tipo == "salida":
-            if bloque.contenido not in usados:
-                asm += f"    {bloque.contenido} DB 0\n"
-                usados.append(bloque.contenido)
+        if bloque.contenido:
+            if bloque.tipo in ["entrada", "proceso"]:
+                contenido = bloque.contenido.replace(" ", "")
+                if "=" in contenido:
+                    var = contenido.split("=")[0]
+                    if var.isidentifier():
+                        variables.add(var)
+            if "printf" in bloque.contenido:
+                msg_text = bloque.contenido.strip()
+                msg_clean = msg_text.replace("printf(", "").replace(")", "").replace('"', '').strip()
+                label = f"msg_{len(mensajes)}"
+                mensajes.append((bloque, label, msg_clean))
+
+    for var in variables:
+        asm += f"    {var} DB 0\n"
+    for _, label, contenido in mensajes:
+        asm += f"    {label} DB \"{contenido}$\"\n"
 
     asm += ".CODE\nMAIN:\n"
     asm += "    MOV AX, @DATA\n    MOV DS, AX\n"
 
+    # Construir el cuerpo del programa
     for bloque in diagrama:
-        if bloque.tipo == "entrada":
-            asm += f"    ; Leer {bloque.contenido}\n"
-            asm += "    ; Simulación de lectura - reemplazar según necesidad\n"
-            asm += f"    MOV {bloque.contenido}, 5 ; Valor fijo como ejemplo\n"
-        elif bloque.tipo == "proceso":
-            asm += f"    ; {bloque.contenido}\n"
-        partes = bloque.contenido.replace(" ", "").split("=")
-        if len(partes) == 2:
-            var_dest = partes[0]
-            expresion = partes[1]
+        asm_instrucciones.append(f"{etiquetas[bloque]}:")
 
-            if "+" in expresion:
-                op1, op2 = expresion.split("+")
-                asm += f"    MOV AL, {op1}\n"
-                asm += f"    ADD AL, {op2}\n"
-                asm += f"    MOV {var_dest}, AL\n"
-            elif "-" in expresion:
-                op1, op2 = expresion.split("-")
-                asm += f"    MOV AL, {op1}\n"
-                asm += f"    SUB AL, {op2}\n"
-                asm += f"    MOV {var_dest}, AL\n"
-            elif "*" in expresion:
-                op1, op2 = expresion.split("*")
-                asm += f"    MOV AL, {op1}\n"
-                asm += f"    MOV BL, {op2}\n"
-                asm += f"    MUL BL\n"               # Resultado en AX
-                asm += f"    MOV {var_dest}, AL\n"   # Guardamos solo la parte baja
-            elif "/" in expresion:
-                op1, op2 = expresion.split("/")
-                asm += f"    MOV AL, {op1}\n"
-                asm += f"    CBW\n"                  # Sign extension
-                asm += f"    MOV BL, {op2}\n"
-                asm += f"    DIV BL\n"
-                asm += f"    MOV {var_dest}, AL\n"
+        if bloque.tipo == "entrada" and bloque.contenido:
+            contenido = bloque.contenido.strip()
+            if "=" in contenido:
+                var, val = contenido.replace(" ", "").split("=")
+                asm_instrucciones.append(f"    MOV {var}, {val} ; entrada fija")
+
+        elif bloque.tipo == "proceso" and bloque.contenido:
+            if "printf" in bloque.contenido:
+                for b, label, msg in mensajes:
+                    if b == bloque:
+                        asm_instrucciones.append(f"    LEA DX, {label}")
+                        asm_instrucciones.append(f"    MOV AH, 09H")
+                        asm_instrucciones.append(f"    INT 21H")
+                        break
             else:
-                # Asignación directa
-                asm += f"    MOV AL, {expresion}\n"
-                asm += f"    MOV {var_dest}, AL\n"
+                contenido = bloque.contenido.replace(" ", "")
+                if "=" in contenido:
+                    var_dest, expr = contenido.split("=")
+                    if "+" in expr:
+                        op1, op2 = expr.split("+")
+                        asm_instrucciones.append(f"    MOV AL, {op1}")
+                        asm_instrucciones.append(f"    ADD AL, {op2}")
+                        asm_instrucciones.append(f"    MOV {var_dest}, AL")
+                    elif "-" in expr:
+                        op1, op2 = expr.split("-")
+                        asm_instrucciones.append(f"    MOV AL, {op1}")
+                        asm_instrucciones.append(f"    SUB AL, {op2}")
+                        asm_instrucciones.append(f"    MOV {var_dest}, AL")
+                    else:
+                        asm_instrucciones.append(f"    MOV {var_dest}, {expr}")
 
-        elif bloque.tipo == "salida":
-            asm += f"    ; Mostrar {bloque.contenido}\n"
-            asm += "    MOV DL, '0' + {0}\n".format(bloque.contenido)
-            asm += "    MOV AH, 02H\n    INT 21H\n"
-        elif bloque.tipo == "decisión":
-            asm += f"    ; Evaluar condición: {bloque.contenido}\n"
-            asm += "    ; Simulación de condición\n"
-            asm += "    CMP AL, BL\n    JE etiqueta_si\n    JMP etiqueta_no\n"
-            asm += "etiqueta_si:\n"
-            for si_bloque in bloque.si:
-                asm += f"    ; {si_bloque.tipo.upper()}: {si_bloque.contenido}\n"
-            asm += "    JMP fin_decision\n"
-            asm += "etiqueta_no:\n"
-            for no_bloque in bloque.no:
-                asm += f"    ; {no_bloque.tipo.upper()}: {no_bloque.contenido}\n"
-            asm += "fin_decision:\n"
-        elif bloque.tipo == "fin":
-            asm += "    MOV AH, 4CH\n    INT 21H\n"
+        elif bloque.tipo == "salida" and bloque.contenido:
+            for b, label, msg in mensajes:
+                if b == bloque:
+                    asm_instrucciones.append(f"    LEA DX, {label}")
+                    asm_instrucciones.append(f"    MOV AH, 09H")
+                    asm_instrucciones.append(f"    INT 21H")
+                    break
 
-    asm += "END MAIN\n"
+        elif bloque.tipo == "decisión" and bloque.contenido:
+            condicion = bloque.contenido.replace(" ", "")
+
+            # Operadores compatibles
+            operadores = {
+                ">":  "JG",
+                "<":  "JL",
+                ">=": "JGE",
+                "<=": "JLE",
+                "==": "JE",
+                "!=": "JNE"
+            }
+
+            operador_encontrado = None
+            for op in sorted(operadores.keys(), key=lambda x: -len(x)):  # Detecta operadores de 2 caracteres primero
+                if op in condicion:
+                    operador_encontrado = op
+                    break
+
+            if operador_encontrado:
+                var, val = condicion.split(operador_encontrado)
+                var = var.strip()
+                val = val.strip()
+                asm_instrucciones.append(f"    MOV AL, {var}")
+                asm_instrucciones.append(f"    CMP AL, {val}")
+                jmp_op = operadores[operador_encontrado]
+
+                destino_si = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "si"), None)
+                destino_no = next((c.destino for c in conexiones if c.origen == bloque and c.tipo == "no"), None)
+
+                if destino_si:
+                    asm_instrucciones.append(f"    {jmp_op} {etiquetas[destino_si]}")
+                if destino_no:
+                    asm_instrucciones.append(f"    JMP {etiquetas[destino_no]}")
+                continue
+
+
+        siguiente = next((c.destino for c in conexiones if c.origen == bloque and c.tipo in ["normal", "si", "no"]), None)
+        if siguiente:
+            asm_instrucciones.append(f"    JMP {etiquetas[siguiente]}")
+
+    asm_instrucciones.append("FIN:")
+    asm_instrucciones.append("    MOV AH, 4CH")
+    asm_instrucciones.append("    INT 21H")
+    asm += "\n".join(asm_instrucciones)
+    asm += "\nEND MAIN\n"
+
     mostrar_codigo_asm(asm)
+    return asm
+
+def generar_y_abrir_con_emu8086():
+    try:
+        if not diagrama:
+            raise ValueError("El diagrama está vacío")
+
+        codigo = generar_codigo_asm()
+        if not codigo or not isinstance(codigo, str):
+            raise ValueError("No se generó código válido")
+
+        # Guardar
+        archivo = "programa.asm"
+        with open(archivo, "w", encoding="utf-8") as f:
+            f.write(codigo)
+
+        os.startfile(archivo)  # EMU8086 lo abrirá
+
+    except Exception as e:
+        ventana_error = Toplevel()
+        ventana_error.title("Error")
+        ventana_error.geometry("300x100")
+        tk.Label(ventana_error, text=f"Error:\n{str(e)}", fg="red").pack()
+
+
+def ejecutar_asm():
+    try:
+        if not diagrama:
+            raise ValueError("El diagrama está vacío")
+        
+        codigo_asm = generar_codigo_asm()
+        if not codigo_asm.strip():
+            raise ValueError("No se generó código ASM válido")
+        
+        # Crear archivos temporales
+        temp_dir = tempfile.mkdtemp()
+        asm_path = os.path.join(temp_dir, "programa.asm")
+        bat_path = os.path.join(temp_dir, "ejecutar.bat")
+        
+        # Escribir el código ASM
+        with open(asm_path, 'w') as f:
+            f.write(codigo_asm)
+        
+        # Crear archivo batch para DOSBox
+        batch_content = f"""@echo off
+SET PATH=C:\\TASM;%PATH%
+dosbox -c "mount c {temp_dir}" -c "c:" -c "tasm programa.asm" -c "tlink programa.obj" -c "programa.exe" -c "pause" -c "exit"
+"""
+        with open(bat_path, 'w') as f:
+            f.write(batch_content)
+        
+        # Ejecutar el batch
+        subprocess.Popen(['cmd', '/c', bat_path], shell=True)
+        
+    except Exception as e:
+        ventana_error = Toplevel()
+        ventana_error.title("Error")
+        ventana_error.geometry("300x100")
+        tk.Label(ventana_error, text=f"Error al ejecutar ASM:\n{str(e)}", fg="red").pack()
 
 def mostrar_codigo_asm(codigo):
     ventana_asm = Toplevel()
@@ -635,78 +820,195 @@ def cargar_diagrama():
         conexiones.clear()
         dibujar_bloques()
 
+
+
+
+def editar_bloque():
+    global bloque_seleccionado
+    
+    if not bloque_seleccionado:
+        tk.messagebox.showwarning("Advertencia", "No hay ningún bloque seleccionado")
+        return
+    
+    # Ventana de edición
+    ventana_edicion = Toplevel()
+    ventana_edicion.title(f"Editar Bloque {bloque_seleccionado.tipo}")
+    ventana_edicion.geometry("400x200")
+    
+    # Contenido actual
+    contenido_actual = bloque_seleccionado.contenido if bloque_seleccionado.contenido else ""
+    
+    # Etiqueta y campo de texto
+    tk.Label(ventana_edicion, text="Nuevo contenido:").pack(pady=5)
+    texto_edicion = tk.Text(ventana_edicion, height=8, width=40)
+    texto_edicion.pack(pady=5)
+    texto_edicion.insert(tk.END, contenido_actual)
+    
+    # Función para guardar cambios
+    def guardar_cambios():
+        nuevo_contenido = texto_edicion.get("1.0", tk.END).strip()
+        bloque_seleccionado.contenido = nuevo_contenido
+        dibujar_bloques()
+        mostrar_diagrama()
+        ventana_edicion.destroy()
+        tk.messagebox.showinfo("Éxito", "Bloque actualizado correctamente")
+    
+    # Botón de guardar
+    tk.Button(ventana_edicion, text="Guardar Cambios", command=guardar_cambios, bg="green", fg="white").pack(pady=10)
+
+
 # --- Interfaz principal ---
 ventana = tk.Tk()
-ventana.title("Editor de Diagrama de Flujo")
-ventana.geometry("950x600")
-ventana.configure(bg="midnight blue")
+ventana.title("Editor de Diagrama de Flujo Avanzado")
+ventana.geometry("1000x650")  # Aumentamos un poco el tamaño
+ventana.configure(bg="#2c3e50")  # Fondo oscuro moderno
 
-# Botones de bloques
-btn_style = {"bg": "slategray2", "fg": "black", "font": ("Arial", 10, "bold"), "relief": "groove", "width": 10}
+# --- Frame superior para botones de bloques ---
+frame_bloques = tk.Frame(ventana, bg="#34495e", padx=5, pady=5)
+frame_bloques.pack(fill=tk.X, padx=5, pady=(5,0))
+
+# Estilo para los botones
+btn_style = {
+    "bg": "#3498db", 
+    "fg": "white", 
+    "font": ("Arial", 9, "bold"), 
+    "relief": tk.GROOVE, 
+    "borderwidth": 2,
+    "width": 12,
+    "height": 1
+}
+
+# Botones de tipos de bloques
 tipos = ['inicio', 'entrada', 'proceso', 'decisión', 'salida', 'fin']
 for i, tipo in enumerate(tipos):
-    b = tk.Button(ventana, text=tipo.upper(), command=lambda t=tipo: agregar_bloque(t), **btn_style)
-    b.place(x=10 + i*110, y=10)
+    b = tk.Button(
+        frame_bloques, 
+        text=tipo.upper(), 
+        command=lambda t=tipo: agregar_bloque(t),
+        **btn_style
+    )
+    b.grid(row=0, column=i, padx=3, pady=2)
 
-# Botón para limpiar todo, guardar, cargar, generar c y generar asm
-btn_clear = tk.Button(ventana, text="Limpiar Todo", command=limpiar_diagrama, bg="red", fg="white", font=("Arial", 10, "bold"))
-btn_clear.place(x=10, y=50)
+# --- Frame para botones de acciones ---
+frame_acciones = tk.Frame(ventana, bg="#34495e", padx=5, pady=5)
+frame_acciones.pack(fill=tk.X, padx=5, pady=(0,5))
 
-btn_guardar = tk.Button(ventana, text="Guardar", command=guardar_diagrama, bg="green", fg="white", font=("Arial", 10, "bold"))
-btn_guardar.place(x=130, y=50)
+# Botones de acciones principales
+acciones_principales = [
+    ("Limpiar Todo", limpiar_diagrama, "#e74c3c"),
+    ("Guardar", guardar_diagrama, "#2ecc71"),
+    ("Cargar", cargar_diagrama, "#3498db"),
+    ("Editar Bloque", editar_bloque, "#9b59b6")
+]
 
-btn_cargar = tk.Button(ventana, text="Cargar", command=cargar_diagrama, bg="blue", fg="white", font=("Arial", 10, "bold"))
-btn_cargar.place(x=230, y=50)
+for i, (texto, comando, color) in enumerate(acciones_principales):
+    btn = tk.Button(
+        frame_acciones,
+        text=texto,
+        command=comando,
+        bg=color,
+        fg="white",
+        font=("Arial", 9, "bold"),
+        width=12,
+        height=1
+    )
+    btn.grid(row=0, column=i, padx=3, pady=2)
 
-btn_c = tk.Button(ventana, text="Generar C", command=on_generar_c_click, bg="gold", fg="black", font=("Arial", 10, "bold"))
-btn_c.place(x=350, y=50)
+# Botones de generación de código
+acciones_codigo = [
+    ("Generar C", on_generar_c_click, "#f1c40f", "black"),
+    ("Generar ASM", generar_codigo_asm, "#e67e22", "black"),
+    ("Abrir EMU8086", generar_y_abrir_con_emu8086, "#e84393", "white")
+]
 
-btn_asm = tk.Button(ventana, text="Generar ASM", command=generar_codigo_asm, bg="orange", fg="black", font=("Arial", 10, "bold"))
-btn_asm.place(x=470, y=50)
+for i, (texto, comando, color, fg) in enumerate(acciones_codigo, start=len(acciones_principales)):
+    btn = tk.Button(
+        frame_acciones,
+        text=texto,
+        command=comando,
+        bg=color,
+        fg=fg,
+        font=("Arial", 9, "bold"),
+        width=12,
+        height=1
+    )
+    btn.grid(row=0, column=i, padx=3, pady=2)
 
+# --- Frame principal con canvas y texto ---
+frame_principal = tk.Frame(ventana, bg="#2c3e50")
+frame_principal.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0,5))
 
-# Canvas para dibujo
-canvas = tk.Canvas(ventana, width=700, height=400, bg="white")
-canvas.place(x=10, y=100)
-canvas.bind("<Button-1>", on_canvas_click)
-canvas.bind("<B1-Motion>", on_canvas_drag)
-canvas.bind("<ButtonRelease-1>", on_canvas_release)
+# Panel del diagrama (canvas con scroll)
+frame_canvas = tk.Frame(frame_principal, bg="#34495e")
+frame_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0,5))
 
-# Texto del diagrama
-texto = tk.Text(ventana, width=35, height=30, bg="black", fg="gold", font=("Courier", 9))
-texto.place(x=730, y=10)
-
-# --- Frame con Scroll para el Canvas ---
-canvas_frame = tk.Frame(ventana, width=700, height=400)
-canvas_frame.place(x=10, y=100)
-
-scroll_y = tk.Scrollbar(canvas_frame, orient=tk.VERTICAL)
+# Scrollbars para el canvas
+scroll_y = tk.Scrollbar(frame_canvas)
 scroll_y.pack(side=tk.RIGHT, fill=tk.Y)
 
-scroll_x = tk.Scrollbar(canvas_frame, orient=tk.HORIZONTAL)
+scroll_x = tk.Scrollbar(frame_canvas, orient=tk.HORIZONTAL)
 scroll_x.pack(side=tk.BOTTOM, fill=tk.X)
 
-canvas = tk.Canvas(canvas_frame, width=680, height=380, bg="white",
-                yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set,
-                scrollregion=(0, 0, 2000, 2000))  # Puedes ajustar el tamaño del área de trabajo aquí
+# Canvas de dibujo
+canvas = tk.Canvas(
+    frame_canvas,
+    width=700,
+    height=500,
+    bg="white",
+    yscrollcommand=scroll_y.set,
+    xscrollcommand=scroll_x.set,
+    scrollregion=(0, 0, 2000, 2000),
+    highlightthickness=0
+)
+canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
 scroll_y.config(command=canvas.yview)
 scroll_x.config(command=canvas.xview)
-canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-# Eventos de movimiento de bloques (sin cambios)
+# Panel de texto (previsualización del diagrama)
+frame_texto = tk.Frame(frame_principal, bg="#34495e")
+frame_texto.pack(side=tk.RIGHT, fill=tk.BOTH)
+
+label_texto = tk.Label(
+    frame_texto, 
+    text="Vista Previa del Diagrama", 
+    bg="#34495e", 
+    fg="white", 
+    font=("Arial", 10, "bold")
+)
+label_texto.pack(fill=tk.X)
+
+texto = tk.Text(
+    frame_texto,
+    width=35,
+    height=30,
+    bg="#1e272e",
+    fg="#f5f6fa",
+    font=("Consolas", 9),
+    insertbackground="white",
+    wrap=tk.WORD,
+    padx=10,
+    pady=10
+)
+texto.pack(fill=tk.BOTH, expand=True)
+
+# Barra de scroll para el texto
+scroll_text = tk.Scrollbar(frame_texto)
+scroll_text.pack(side=tk.RIGHT, fill=tk.Y)
+texto.config(yscrollcommand=scroll_text.set)
+scroll_text.config(command=texto.yview)
+
+# --- Configuración de eventos ---
 canvas.bind("<Button-1>", on_canvas_click)
 canvas.bind("<B1-Motion>", on_canvas_drag)
 canvas.bind("<ButtonRelease-1>", on_canvas_release)
+canvas.bind("<Double-Button-1>", lambda e: editar_bloque())
 canvas.tag_bind("puerto", "<Button-1>", on_puerto_click)
 canvas.tag_bind("puerto", "<B1-Motion>", on_puerto_drag)
 canvas.tag_bind("puerto", "<ButtonRelease-1>", on_puerto_release)
 
 
-
-# Zoom con Ctrl + Rueda del mouse
-scale = 1.0
-
+# --- Función de Zoom ---
 def zoom(event):
     global scale
     if event.state & 0x0004:  # Ctrl presionado
@@ -718,10 +1020,24 @@ def zoom(event):
         canvas.scale("all", canvas.canvasx(event.x), canvas.canvasy(event.y), factor, factor)
         canvas.configure(scrollregion=canvas.bbox("all"))
 
-canvas.bind("<MouseWheel>", zoom)  # Para Windows
-canvas.bind("<Button-4>", zoom)    # Para Linux (scroll up)
-canvas.bind("<Button-5>", zoom)    # Para Linux (scroll down)
+# Zoom con Ctrl + Rueda del mouse
+scale = 1.0  # Variable global para controlar el zoom
+canvas.bind("<MouseWheel>", zoom)
+canvas.bind("<Button-4>", zoom)
+canvas.bind("<Button-5>", zoom)
+
+# --- Barra de estado ---
+barra_estado = tk.Label(
+    ventana,
+    text="Listo | Diagrama de Flujo v1.0",
+    bd=1,
+    relief=tk.SUNKEN,
+    anchor=tk.W,
+    bg="#2c3e50",
+    fg="#ecf0f1",
+    font=("Arial", 8)
+)
+barra_estado.pack(fill=tk.X, padx=5, pady=(0,5))
 
 ventana.mainloop()
-
 
