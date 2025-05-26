@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 from tkinter import simpledialog, Toplevel, scrolledtext
 import pickle
 from tkinter import filedialog
@@ -7,6 +8,7 @@ import os
 import subprocess
 import tempfile
 import sys
+import re
 
 
 # Clase para los bloques
@@ -702,41 +704,6 @@ def generar_y_abrir_con_emu8086():
         ventana_error.geometry("300x100")
         tk.Label(ventana_error, text=f"Error:\n{str(e)}", fg="red").pack()
 
-# esta de ejecutar asm no se usa por ahora
-def ejecutar_asm():
-    try:
-        if not diagrama:
-            raise ValueError("El diagrama está vacío")
-        
-        codigo_asm = generar_codigo_asm()
-        if not codigo_asm.strip():
-            raise ValueError("No se generó código ASM válido")
-        
-        # Crear archivos temporales
-        temp_dir = tempfile.mkdtemp()
-        asm_path = os.path.join(temp_dir, "programa.asm")
-        bat_path = os.path.join(temp_dir, "ejecutar.bat")
-        
-        # Escribir el código ASM
-        with open(asm_path, 'w') as f:
-            f.write(codigo_asm)
-        
-        # Crear archivo batch para DOSBox
-        batch_content = f"""@echo off
-SET PATH=C:\\TASM;%PATH%
-dosbox -c "mount c {temp_dir}" -c "c:" -c "tasm programa.asm" -c "tlink programa.obj" -c "programa.exe" -c "pause" -c "exit"
-"""
-        with open(bat_path, 'w') as f:
-            f.write(batch_content)
-        
-        # Ejecutar el batch
-        subprocess.Popen(['cmd', '/c', bat_path], shell=True)
-        
-    except Exception as e:
-        ventana_error = Toplevel()
-        ventana_error.title("Error")
-        ventana_error.geometry("300x100")
-        tk.Label(ventana_error, text=f"Error al ejecutar ASM:\n{str(e)}", fg="red").pack()
 
 def mostrar_codigo_asm(codigo):
     ventana_asm = Toplevel()
@@ -745,6 +712,209 @@ def mostrar_codigo_asm(codigo):
     texto_asm = scrolledtext.ScrolledText(ventana_asm, font=("Courier", 10), bg="black", fg="lightgreen", insertbackground="white")
     texto_asm.pack(fill="both", expand=True)
     texto_asm.insert(tk.END, codigo)
+
+
+import re
+
+def traducir_c_a_asm(codigo_c: str) -> str:
+    asm = ".MODEL SMALL\n.STACK 100H\n.DATA\n"
+    instrucciones = []
+    variables = set()
+    mensajes = []
+    etiquetas = []
+    salto_stack = []
+    etiqueta_id = 0
+
+    lineas = [line.strip() for line in codigo_c.strip().splitlines() if line.strip()]
+    
+    # Preprocesar todas las declaraciones
+    for linea in lineas:
+        # int x = 5;
+        match = re.match(r"int\s+(\w+)\s*=\s*(\d+);", linea)
+        if match:
+            var, val = match.groups()
+            variables.add(var)
+            instrucciones.append(f"    MOV {var}, {val}")
+        # int x;
+        match = re.match(r"int\s+(\w+);", linea)
+        if match:
+            var = match.group(1)
+            variables.add(var)
+
+    i = 0
+    while i < len(lineas):
+        linea = lineas[i]
+
+        if re.match(r"int\s+", linea):
+            i += 1
+            continue
+
+        # printf("texto");
+        match = re.match(r'printf\("([^"]+)"\);', linea)
+        if match:
+            msg = match.group(1)
+            label = f"msg_{len(mensajes)}"
+            mensajes.append((label, msg))
+            instrucciones.append(f"    LEA DX, {label}")
+            instrucciones.append("    MOV AH, 09H")
+            instrucciones.append("    INT 21H")
+            i += 1
+            continue
+
+        # printf("texto", var);
+        match = re.match(r'printf\("([^"]+)",\s*(\w+)\);', linea)
+        if match:
+            msg, var = match.groups()
+            label = f"msg_{len(mensajes)}"
+            mensajes.append((label, msg))
+            instrucciones.append(f"    LEA DX, {label}")
+            instrucciones.append("    MOV AH, 09H")
+            instrucciones.append("    INT 21H")
+            instrucciones.append(f"    MOV AL, {var}")
+            instrucciones.append("    ADD AL, 30h")
+            instrucciones.append("    MOV DL, AL")
+            instrucciones.append("    MOV AH, 02H")
+            instrucciones.append("    INT 21H")
+            i += 1
+            continue
+
+        # x = x + 1;
+        match = re.match(r"(\w+)\s*=\s*(\w+)\s*\+\s*(\d+);", linea)
+        if match:
+            dest, op1, op2 = match.groups()
+            instrucciones.append(f"    MOV AL, {op1}")
+            instrucciones.append(f"    ADD AL, {op2}")
+            instrucciones.append(f"    MOV {dest}, AL")
+            i += 1
+            continue
+
+        # x = x - 1;
+        match = re.match(r"(\w+)\s*=\s*(\w+)\s*-\s*(\d+);", linea)
+        if match:
+            dest, op1, op2 = match.groups()
+            instrucciones.append(f"    MOV AL, {op1}")
+            instrucciones.append(f"    SUB AL, {op2}")
+            instrucciones.append(f"    MOV {dest}, AL")
+            i += 1
+            continue
+
+        # x = 5;
+        match = re.match(r"(\w+)\s*=\s*(\d+);", linea)
+        if match:
+            var, val = match.groups()
+            instrucciones.append(f"    MOV {var}, {val}")
+            i += 1
+            continue
+
+        # if (x > 0) {
+        match = re.match(r"if\s*\((\w+)\s*(==|!=|<=|>=|<|>)\s*(\d+)\)\s*{?", linea)
+        if match:
+            var, op, val = match.groups()
+            etiqueta_id += 1
+            etq_si = f"ETQ_SI_{etiqueta_id}"
+            etq_fin = f"ETQ_ENDIF_{etiqueta_id}"
+            salto_stack.append(etq_fin)
+            operadores = {">": "JG", "<": "JL", ">=": "JGE", "<=": "JLE", "==": "JE", "!=": "JNE"}
+            instrucciones.append(f"    MOV AL, {var}")
+            instrucciones.append(f"    CMP AL, {val}")
+            instrucciones.append(f"    {operadores[op]} {etq_si}")
+            instrucciones.append(f"    JMP {etq_fin}")
+            instrucciones.append(f"{etq_si}:")
+            i += 1
+            continue
+
+        # else {
+        if re.match(r"else\s*{?", linea):
+            etq_fin = salto_stack.pop()
+            etiqueta_id += 1
+            etq_else = f"ETQ_ELSE_{etiqueta_id}"
+            instrucciones.append(f"    JMP {etq_fin}")
+            instrucciones.append(f"{etq_else}:")
+            salto_stack.append(etq_fin)
+            i += 1
+            continue
+
+        # while (x > 0) {
+        match = re.match(r"while\s*\((\w+)\s*(==|!=|<=|>=|<|>)\s*(\d+)\)\s*{?", linea)
+        if match:
+            var, op, val = match.groups()
+            etiqueta_id += 1
+            etq_ini = f"ETQ_WHILE_{etiqueta_id}"
+            etq_body = f"ETQ_BODY_{etiqueta_id}"
+            etq_fin = f"ETQ_WEND_{etiqueta_id}"
+            salto_stack.append((etq_ini, etq_fin))
+            operadores = {">": "JG", "<": "JL", ">=": "JGE", "<=": "JLE", "==": "JE", "!=": "JNE"}
+            instrucciones.append(f"{etq_ini}:")
+            instrucciones.append(f"    MOV AL, {var}")
+            instrucciones.append(f"    CMP AL, {val}")
+            instrucciones.append(f"    {operadores[op]} {etq_body}")
+            instrucciones.append(f"    JMP {etq_fin}")
+            instrucciones.append(f"{etq_body}:")
+            i += 1
+            continue
+
+        # for (i = 0; i < 3; i++) {
+        match = re.match(r"for\s*\(\s*(\w+)\s*=\s*(\d+);\s*\1\s*<\s*(\d+);\s*\1\+\+\s*\)\s*{?", linea)
+        if match:
+            var, ini, fin = match.groups()
+            variables.add(var)
+            etiqueta_id += 1
+            etq_ini = f"ETQ_FOR_{etiqueta_id}"
+            etq_body = f"ETQ_FOR_BODY_{etiqueta_id}"
+            etq_end = f"ETQ_FOR_END_{etiqueta_id}"
+            salto_stack.append((etq_ini, etq_end, var, fin))
+            instrucciones.append(f"    MOV {var}, {ini}")
+            instrucciones.append(f"{etq_ini}:")
+            instrucciones.append(f"    MOV AL, {var}")
+            instrucciones.append(f"    CMP AL, {fin}")
+            instrucciones.append(f"    JL {etq_body}")
+            instrucciones.append(f"    JMP {etq_end}")
+            instrucciones.append(f"{etq_body}:")
+            i += 1
+            continue
+
+        # cierre de bloques: }
+        if linea == "}":
+            if salto_stack:
+                top = salto_stack.pop()
+                if isinstance(top, str):  # if/else
+                    instrucciones.append(f"{top}:")
+                elif len(top) == 2:  # while
+                    etq_ini, etq_fin = top
+                    instrucciones.append(f"    JMP {etq_ini}")
+                    instrucciones.append(f"{etq_fin}:")
+                elif len(top) == 4:  # for
+                    etq_ini, etq_fin, var, _ = top
+                    instrucciones.append(f"    INC {var}")
+                    instrucciones.append(f"    JMP {etq_ini}")
+                    instrucciones.append(f"{etq_fin}:")
+            i += 1
+            continue
+
+        i += 1
+
+    for var in variables:
+        asm += f"    {var} DB 0\n"
+
+    for label, msg in mensajes:
+        asm += f"    {label} DB \"{msg}$\"\n"
+
+    asm += ".CODE\nMAIN:\n"
+    asm += "    MOV AX, @DATA\n    MOV DS, AX\n"
+    asm += "\n".join(instrucciones)
+    asm += "\n    MOV AH, 4CH\n    INT 21H\nEND MAIN\n"
+    return asm
+
+
+
+def traducir_c_actual_a_asm():
+    try:
+        codigo_c = generar_codigo_c()
+        asm = traducir_c_a_asm(codigo_c)
+        mostrar_codigo_asm(asm)
+    except Exception as e:
+        messagebox.showerror("Error", f"No se pudo traducir el código C:\n{e}")
+
 
 def guardar_diagrama():
     archivo = filedialog.asksaveasfilename(
@@ -858,6 +1028,72 @@ def cargar_diagrama():
         conexiones.clear()
         dibujar_bloques()
 
+import re
+from tkinter import messagebox
+
+def validar_diagrama():
+    errores = []
+
+    # 1. Verificar que haya al menos un inicio y un fin
+    tipos = [b.tipo for b in diagrama]
+    if tipos.count("inicio") != 1:
+        errores.append("Debe haber exactamente un bloque 'inicio'.")
+    if "fin" not in tipos:
+        errores.append("Debe haber al menos un bloque 'fin'.")
+
+    # 2. Revisar conexiones por bloque
+    for i, bloque in enumerate(diagrama):
+        salidas = [c for c in conexiones if c.origen == bloque]
+        entradas = [c for c in conexiones if c.destino == bloque]
+
+        if bloque.tipo != "fin" and not salidas:
+            errores.append(f"Bloque {i} ({bloque.tipo}): no tiene salida.")
+        if bloque.tipo != "inicio" and not entradas:
+            errores.append(f"Bloque {i} ({bloque.tipo}): no tiene ninguna conexión de entrada.")
+
+        if bloque.tipo == "decisión":
+            tiene_si = any(c.tipo == "si" for c in salidas)
+            tiene_no = any(c.tipo == "no" for c in salidas)
+            if not tiene_si or not tiene_no:
+                errores.append(f"Bloque {i} (decisión): le falta rama {'si' if not tiene_si else 'no'}.")
+
+    # 3. Análisis sintáctico por tipo
+    for i, bloque in enumerate(diagrama):
+        if not bloque.contenido:
+            continue
+        texto = bloque.contenido.strip()
+
+        if bloque.tipo == "entrada":
+            if not re.match(r"^\w+\s*=\s*\d+$", texto):
+                errores.append(f"Bloque {i} (entrada): debe tener formato 'variable = valor'.")
+
+        elif bloque.tipo == "proceso":
+            valido = (
+                re.match(r"^\w+\s*=\s*\w+(\s*[\+\-\*/]\s*\w+)?$", texto) or
+                re.match(r"^\w+\+\+$", texto) or
+                re.match(r"^\w+\s*\+=\s*1$", texto) or
+                re.match(r'printf\(\s*".*?"\s*(,\s*\w+)?\s*\)', texto)  # permite printf dentro de proceso
+            )
+            if not valido:
+                errores.append(f"Bloque {i} (proceso): expresión inválida '{texto}'.")
+
+
+        elif bloque.tipo == "decisión":
+            if not any(op in texto for op in ["<", ">", "<=", ">=", "==", "!="]):
+                errores.append(f"Bloque {i} (decisión): debe contener un operador de comparación.")
+
+        elif bloque.tipo == "salida":
+            if "printf" in texto:
+                if not re.match(r'printf\(\s*".*?"\s*,\s*\w+\s*\)', texto):
+                    errores.append(f"Bloque {i} (salida): printf debe tener formato '\"mensaje\", variable'.")
+
+    # 4. Mostrar errores o éxito
+    if errores:
+        messagebox.showerror("Errores en el diagrama", "\n".join(errores))
+    else:
+        messagebox.showinfo("Validación exitosa", "No se encontraron errores en el diagrama.")
+
+
 
 
 
@@ -871,7 +1107,7 @@ def editar_bloque():
     # Ventana de edición
     ventana_edicion = Toplevel()
     ventana_edicion.title(f"Editar Bloque {bloque_seleccionado.tipo}")
-    ventana_edicion.geometry("400x200")
+    ventana_edicion.geometry("400x220")
     
     # Contenido actual
     contenido_actual = bloque_seleccionado.contenido if bloque_seleccionado.contenido else ""
@@ -897,7 +1133,7 @@ def editar_bloque():
 
 # --- Interfaz principal ---
 ventana = tk.Tk()
-ventana.title("Editor de Diagrama de Flujo Avanzado")
+ventana.title("Proyecto - Compiladores")
 ventana.geometry("1000x650")  # Aumentamos un poco el tamaño
 ventana.configure(bg="#2c3e50")  # Fondo oscuro moderno
 
@@ -936,8 +1172,11 @@ acciones_principales = [
     ("Limpiar Todo", limpiar_diagrama, "#e74c3c"),
     ("Guardar", guardar_diagrama, "#2ecc71"),
     ("Cargar", cargar_diagrama, "#3498db"),
-    ("Editar Bloque", editar_bloque, "#9b59b6")
+    ("Editar Bloque", editar_bloque, "#9b59b6"),
+    ("Validar Diagrama", validar_diagrama, "#1abc9c")  # <-- esta línea estaba suelta o mal cerrada
+
 ]
+
 
 for i, (texto, comando, color) in enumerate(acciones_principales):
     btn = tk.Button(
@@ -955,7 +1194,7 @@ for i, (texto, comando, color) in enumerate(acciones_principales):
 # Botones de generación de código
 acciones_codigo = [
     ("Generar C", on_generar_c_click, "#f1c40f", "black"),
-    ("Generar ASM", generar_codigo_asm, "#e67e22", "black"),
+    ("Traducir a ASM", generar_codigo_asm, "#e67e22", "black"),
     ("Abrir EMU8086", generar_y_abrir_con_emu8086, "#e84393", "white")
 ]
 
@@ -1067,7 +1306,7 @@ canvas.bind("<Button-5>", zoom)
 # --- Barra de estado ---
 barra_estado = tk.Label(
     ventana,
-    text="Listo | Diagrama de Flujo v1.0",
+    text="Proyecto Compiladores 2025 | Diagrama de Flujo v1.0",
     bd=1,
     relief=tk.SUNKEN,
     anchor=tk.W,
