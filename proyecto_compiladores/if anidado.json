@@ -1,0 +1,24 @@
+{
+  "version": 1.0,
+  "bloques": [
+    { "tipo": "inicio", "contenido": null, "x": 30, "y": 30 },
+    { "tipo": "entrada", "contenido": "x = 5", "x": 100, "y": 100 },
+    { "tipo": "decisión", "contenido": "x > 0", "x": 220, "y": 140 },
+    { "tipo": "decisión", "contenido": "x < 10", "x": 360, "y": 120 },
+    { "tipo": "proceso", "contenido": "printf(\"entre 1 y 9\")", "x": 500, "y": 110 },
+    { "tipo": "proceso", "contenido": "printf(\"demasiado grande\")", "x": 400, "y": 210 },
+    { "tipo": "proceso", "contenido": "printf(\"negativo\")", "x": 270, "y": 230 },
+    { "tipo": "fin", "contenido": null, "x": 440, "y": 320 }
+  ],
+  "conexiones": [
+    { "origen": 0, "destino": 1, "tipo": "normal" },
+    { "origen": 1, "destino": 2, "tipo": "normal" },
+    { "origen": 2, "destino": 3, "tipo": "si" },
+    { "origen": 2, "destino": 6, "tipo": "no" },
+    { "origen": 3, "destino": 4, "tipo": "si" },
+    { "origen": 3, "destino": 5, "tipo": "no" },
+    { "origen": 4, "destino": 7, "tipo": "normal" },
+    { "origen": 5, "destino": 7, "tipo": "normal" },
+    { "origen": 6, "destino": 7, "tipo": "normal" }
+  ]
+}

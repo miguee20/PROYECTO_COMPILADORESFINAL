@@ -1,0 +1,85 @@
+{
+    "version": 1.0,
+    "bloques": [
+        {
+            "tipo": "inicio",
+            "contenido": null,
+            "x": 31.0,
+            "y": 38.0,
+            "canvas_id": null,
+            "text_id": null
+        },
+        {
+            "tipo": "entrada",
+            "contenido": "n = 4",
+            "x": 81.0,
+            "y": 110.0,
+            "canvas_id": null,
+            "text_id": null
+        },
+        {
+            "tipo": "decisión",
+            "contenido": "n = 1",
+            "x": 219.0,
+            "y": 156.0,
+            "canvas_id": null,
+            "text_id": null
+        },
+        {
+            "tipo": "proceso",
+            "contenido": "printf(\"mayor\")",
+            "x": 382.0,
+            "y": 138.0,
+            "canvas_id": null,
+            "text_id": null
+        },
+        {
+            "tipo": "proceso",
+            "contenido": "printf(\"menor\")",
+            "x": 262.0,
+            "y": 242.0,
+            "canvas_id": null,
+            "text_id": null
+        },
+        {
+            "tipo": "fin",
+            "contenido": null,
+            "x": 430.0,
+            "y": 256.0,
+            "canvas_id": null,
+            "text_id": null
+        }
+    ],
+    "conexiones": [
+        {
+            "origen": 0,
+            "destino": 1,
+            "tipo": "normal"
+        },
+        {
+            "origen": 1,
+            "destino": 2,
+            "tipo": "normal"
+        },
+        {
+            "origen": 2,
+            "destino": 3,
+            "tipo": "si"
+        },
+        {
+            "origen": 2,
+            "destino": 4,
+            "tipo": "no"
+        },
+        {
+            "origen": 4,
+            "destino": 5,
+            "tipo": "normal"
+        },
+        {
+            "origen": 3,
+            "destino": 5,
+            "tipo": "normal"
+        }
+    ]
+}

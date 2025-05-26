@@ -1,0 +1,19 @@
+{
+  "version": 1.0,
+  "bloques": [
+    { "tipo": "inicio", "contenido": null, "x": 50, "y": 50 },
+    { "tipo": "proceso", "contenido": "i=1", "x": 150, "y": 50 },
+    { "tipo": "decisión", "contenido": "i <= 5", "x": 250, "y": 50 },
+    { "tipo": "proceso", "contenido": "printf(\"%d\\n\", i)", "x": 350, "y": 20 },
+    { "tipo": "proceso", "contenido": "i++", "x": 350, "y": 80 },
+    { "tipo": "fin", "contenido": null, "x": 450, "y": 50 }
+  ],
+  "conexiones": [
+    { "origen": 0, "destino": 1, "tipo": "normal" },
+    { "origen": 1, "destino": 2, "tipo": "normal" },
+    { "origen": 2, "destino": 3, "tipo": "si" },
+    { "origen": 3, "destino": 4, "tipo": "normal" },
+    { "origen": 4, "destino": 2, "tipo": "normal" },
+    { "origen": 2, "destino": 5, "tipo": "no" }
+  ]
+}

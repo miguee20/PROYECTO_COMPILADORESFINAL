@@ -1,0 +1,16 @@
+{
+  "version": 1.0,
+  "bloques": [
+    { "tipo": "inicio", "contenido": null, "x": 50, "y": 50 },
+    { "tipo": "entrada", "contenido": "x + 2", "x": 150, "y": 50 },
+    { "tipo": "proceso", "contenido": "y = ", "x": 250, "y": 50 },
+    { "tipo": "decisión", "contenido": "z", "x": 350, "y": 50 },
+    { "tipo": "fin", "contenido": null, "x": 450, "y": 50 }
+  ],
+  "conexiones": [
+    { "origen": 0, "destino": 1, "tipo": "normal" },
+    { "origen": 1, "destino": 2, "tipo": "normal" },
+    { "origen": 2, "destino": 3, "tipo": "normal" },
+    { "origen": 3, "destino": 4, "tipo": "si" }
+  ]
+}
